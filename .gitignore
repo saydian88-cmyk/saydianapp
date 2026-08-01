@@ -44,6 +44,10 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# User-supplied reference archives and copied deliverables
+/Saidian小程序源码.zip
+/app-release.apk
+
 # Local environment, signing and partner SDK artifacts
 /config/*.json
 !/config/*.json.example

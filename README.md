@@ -15,10 +15,10 @@ Swift/Objective-C 适配 Veepoo SDK；Flutter 层共享页面、状态机、健�
 - iOS 13+ 蓝牙用途说明和 `bluetooth-central` 后台模式
 - 单元测试、Widget 测试、Android/iOS CI
 
-当前没有 Veepoo 合作方二进制库和量产样机。原生桥因此使用安全的
-`SDK_NOT_CONFIGURED` 适配器；设备页会显示“未配置”，不会生成虚假设备或健康数据。
-Android/iOS/小程序官方仓库和 2026-07-28 最新提交已锁定，Gradle 已支持完整 SDK
-文件集自动检测；具体版本及校验值见接入说明。
+Veepoo 合作客户授权已确认，小程序源码和官方 Android/iOS SDK 已锁定到工程。
+双端原生桥已实现扫描、连接、密码校验、个人信息同步、能力识别、历史健康数据同步及
+心率、血氧、血压、体温手动测量；指标按设备实际能力动态开放。具体版本及调用顺序见
+接入说明。
 
 关爱模块已支持现有 `GET /api/v1/member/care` 和
 `POST /api/v1/member/care`（Bearer + multipart `mobile`）。审核、逐指标授权、
@@ -34,7 +34,7 @@ $flutter = 'F:\Codex\home\tools\flutter\bin\flutter.bat'
 ```
 
 首次使用时复制 `config/dev.json.example` 为 `config/dev.json`。配置文件、签名材料、
-Token、密码和厂商授权库不得提交到代码库。
+Token 和密码不得提交到代码库；合作方 SDK 二进制仅随本私有 App 仓库锁定。
 
 ## 构建
 
@@ -46,6 +46,7 @@ Token、密码和厂商授权库不得提交到代码库。
 iOS 必须在 macOS/Xcode 环境执行：
 
 ```bash
+cd ios && pod install && cd ..
 flutter build ios --release --no-codesign
 ```
 
@@ -56,7 +57,7 @@ flutter build ios --release --no-codesign
 
 - [Veepoo 原生 SDK 接入说明](docs/veepoo-integration.md)
 - [现有后台 API 缺口](docs/api-gap.md)
-- 小程序源码、目标手表型号/芯片/固件和至少两台量产样机仍待提供
+- 小程序源码已提供；目标手表型号/固件和双端量产样机实测仍待完成
 - 正式内测前必须替换线上空白隐私政策和占位用户协议
 
 所有健康结果仅供健康管理参考，不用于诊断或治疗。

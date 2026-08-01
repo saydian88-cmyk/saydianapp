@@ -1,4 +1,4 @@
-# Veepoo SDK 接入闸门
+# Veepoo SDK 接入说明
 
 ## 当前状态
 
@@ -24,31 +24,30 @@ Flutter、Android 和 iOS 的桥接契约已经固定：
 - 小程序：`HBandSDK/WeChat_Mini_Program_Ble_SDK`，
   commit `f24c35d020e989d6fa147dbbd6f2d81bbf6ded20`，SDK `1.1.19`。
 
-当前原生实现仍安全返回 `SDK_NOT_CONFIGURED`。官方 Android README 明确写明 SDK 仅供
-合作客户使用；没有目标型号、匹配固件和合作方授权确认时，不把公开 Demo 二进制直接
-提交到 App 仓库，也不把未上手表验证的调用标记为可用。
+合作客户授权和小程序源码已确认。官方 Android AAR、iOS Framework 及芯片配套依赖已
+锁定到本私有 App 仓库；原生桥已按官方 Demo 完成直接调用。尚未经过目标量产手表验证的
+功能不作真机通过声明。
 
 ## Android
 
-1. 向 Veepoo 确认目标型号所需的协议分支、芯片依赖和量产授权范围。
-2. 按 `android/app/libs/README.md` 放入完整授权文件集。Gradle 已实现完整性检测，
-   缺少任何必需 AAR 时会停止构建。
-3. 在 `MainActivity.kt` 中新增 `VPOperateManager` 适配器，替换
-   `UnconfiguredVeepooAdapter`。
-4. 调用顺序固定为 `init(applicationContext)` → `startScanDevice` →
+1. `android/app/libs` 已锁定完整授权文件集；Gradle 会校验完整性，缺少任何必需 AAR
+   时停止构建。
+2. `MainActivity.kt` 使用 `VPOperateManager` 实现直接适配。
+3. 调用顺序固定为 `init(applicationContext)` → `startScanDevice` →
    `connectDevice` → Notify 成功 → `confirmDevicePwd` → `syncPersonInfo`。
-5. 必须保持单线程命令队列；官方文档明确说明设备不支持多个耗时指令并发。
-6. 使用量产手表验证 Android 8、12 和最新版本的权限、重连、后台恢复和系统杀进程。
+4. Flutter 与 Android 两层均保持串行命令队列；官方文档明确说明设备不支持多个耗时
+   指令并发。
+5. 使用量产手表验证 Android 8、12 和最新版本的权限、重连、后台恢复和系统杀进程。
 
 ## iOS
 
-1. 按 `ios/Runner/Vendor/README.md` 选择唯一协议分支的
-   `VeepooBleSDK.framework`，并加入匹配芯片所需的 Framework。
-2. 在 Xcode 中配置 Embed & Sign、Objective-C bridging header 和厂商要求的链接参数。
-3. 在 `AppDelegate.swift` 的串行队列后接入 Objective-C SDK，保持 MethodChannel
-   返回值与 Flutter 类型一致。
+1. `ios/Runner/Vendor` 已锁定唯一协议分支和官方 Demo 的芯片配套 Framework。
+2. Xcode 已配置链接与必要的 Embed & Sign；FMDB/MJExtension 版本由 `ios/Podfile` 锁定。
+3. `AppDelegate.swift` 保持 MethodChannel 返回值与 Flutter 类型一致，并由 Flutter 串行
+   队列约束设备命令。
 4. 仅启用确有业务需要的后台 BLE 模式，不承诺 iOS 被强制终止后的持续同步。
-5. 使用真机完成 iOS 13、16 和最新版本的权限、恢复、重连与测量测试。
+5. 在 macOS 执行 `pod install` 后，使用真机完成 iOS 13、16 和最新版本的权限、恢复、
+   重连与测量测试。
 
 官方主流程对应 `VPBleCentralManage.sharedBleManager()` →
 `veepooSDKStartScanDeviceAndReceiveScanningDevice` → `veepooSDKConnectDevice` →

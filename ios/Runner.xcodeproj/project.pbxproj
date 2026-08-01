@@ -7,6 +7,17 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F00000000000000000000001 /* VeepooBleSDK.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F00000000000000000000010 /* VeepooBleSDK.framework */; };
+		F00000000000000000000002 /* ABParTool.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F00000000000000000000011 /* ABParTool.framework */; };
+		F00000000000000000000003 /* ABParTool.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = F00000000000000000000011 /* ABParTool.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		F00000000000000000000004 /* DFUnits.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F00000000000000000000012 /* DFUnits.framework */; };
+		F00000000000000000000005 /* GRDFUSDK.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F00000000000000000000013 /* GRDFUSDK.framework */; };
+		F00000000000000000000006 /* GRDFUSDK.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = F00000000000000000000013 /* GRDFUSDK.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		F00000000000000000000007 /* JL_BLEKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F00000000000000000000014 /* JL_BLEKit.framework */; };
+		F00000000000000000000008 /* JLDialUnit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F00000000000000000000015 /* JLDialUnit.framework */; };
+		F00000000000000000000009 /* JLDialUnit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = F00000000000000000000015 /* JLDialUnit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		F0000000000000000000000A /* ZipZap.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F00000000000000000000016 /* ZipZap.framework */; };
+		F0000000000000000000000B /* ZipZap.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = F00000000000000000000016 /* ZipZap.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */ = {isa = PBXBuildFile; fileRef = 1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */; };
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
@@ -35,6 +46,10 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
+				F00000000000000000000003 /* ABParTool.framework in Embed Frameworks */,
+				F00000000000000000000006 /* GRDFUSDK.framework in Embed Frameworks */,
+				F00000000000000000000009 /* JLDialUnit.framework in Embed Frameworks */,
+				F0000000000000000000000B /* ZipZap.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -42,6 +57,13 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		F00000000000000000000010 /* VeepooBleSDK.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = VeepooBleSDK.framework; sourceTree = "<group>"; };
+		F00000000000000000000011 /* ABParTool.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = ABParTool.framework; sourceTree = "<group>"; };
+		F00000000000000000000012 /* DFUnits.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = DFUnits.framework; sourceTree = "<group>"; };
+		F00000000000000000000013 /* GRDFUSDK.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = GRDFUSDK.framework; sourceTree = "<group>"; };
+		F00000000000000000000014 /* JL_BLEKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = JL_BLEKit.framework; sourceTree = "<group>"; };
+		F00000000000000000000015 /* JLDialUnit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = JLDialUnit.framework; sourceTree = "<group>"; };
+		F00000000000000000000016 /* ZipZap.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = ZipZap.framework; sourceTree = "<group>"; };
 		1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GeneratedPluginRegistrant.h; sourceTree = "<group>"; };
 		1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = GeneratedPluginRegistrant.m; sourceTree = "<group>"; };
 		331C807B294A618700263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
@@ -66,6 +88,13 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F00000000000000000000001 /* VeepooBleSDK.framework in Frameworks */,
+				F00000000000000000000002 /* ABParTool.framework in Frameworks */,
+				F00000000000000000000004 /* DFUnits.framework in Frameworks */,
+				F00000000000000000000005 /* GRDFUSDK.framework in Frameworks */,
+				F00000000000000000000007 /* JL_BLEKit.framework in Frameworks */,
+				F00000000000000000000008 /* JLDialUnit.framework in Frameworks */,
+				F0000000000000000000000A /* ZipZap.framework in Frameworks */,
 				78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -73,6 +102,20 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		F00000000000000000000020 /* Vendor */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000010 /* VeepooBleSDK.framework */,
+				F00000000000000000000011 /* ABParTool.framework */,
+				F00000000000000000000012 /* DFUnits.framework */,
+				F00000000000000000000013 /* GRDFUSDK.framework */,
+				F00000000000000000000014 /* JL_BLEKit.framework */,
+				F00000000000000000000015 /* JLDialUnit.framework */,
+				F00000000000000000000016 /* ZipZap.framework */,
+			);
+			path = Vendor;
+			sourceTree = "<group>";
+		};
 		331C8082294A63A400263BE5 /* RunnerTests */ = {
 			isa = PBXGroup;
 			children = (
@@ -115,6 +158,7 @@
 		97C146F01CF9000F007C117D /* Runner */ = {
 			isa = PBXGroup;
 			children = (
+				F00000000000000000000020 /* Vendor */,
 				97C146FA1CF9000F007C117D /* Main.storyboard */,
 				97C146FD1CF9000F007C117D /* Assets.xcassets */,
 				97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */,
@@ -377,10 +421,19 @@
 				CLANG_ENABLE_MODULES = YES;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				ENABLE_BITCODE = NO;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Runner/Vendor",
+				);
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+					"-lsqlite3",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = cc.saidian.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -556,10 +609,19 @@
 				CLANG_ENABLE_MODULES = YES;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				ENABLE_BITCODE = NO;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Runner/Vendor",
+				);
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+					"-lsqlite3",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = cc.saidian.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -578,10 +640,19 @@
 				CLANG_ENABLE_MODULES = YES;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				ENABLE_BITCODE = NO;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Runner/Vendor",
+				);
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+					"-lsqlite3",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = cc.saidian.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
