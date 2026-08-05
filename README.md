@@ -56,6 +56,7 @@ flutter build ios --release --no-codesign
 
 ## 接入闸门
 
+- [开发交接说明](docs/HANDOFF.md)
 - [Veepoo 原生 SDK 接入说明](docs/veepoo-integration.md)
 - [现有后台 API 缺口](docs/api-gap.md)
 - 小程序源码已提供；目标手表型号/固件和双端量产样机实测仍待完成
