@@ -1,14 +1,15 @@
 # 内测版验证记录
 
-验证日期：2026-08-01
+验证日期：2026-08-05
 
 ## 已通过
 
 - `flutter analyze --no-pub`：无问题。
-- `flutter test`：11 项测试全部通过。
+- `flutter test`：12 项测试全部通过，含 390 × 844 手机视口五个核心页布局检查。
+- 蓝湖 UI 参考已应用于登录、健康首页、健康指标、设备、远程关爱和个人中心。
 - Veepoo Android AAR 真实 Kotlin 编译：通过。
-- Android release APK：构建通过（67.4 MB），APK v2 签名校验通过。
-- Android release AAB：构建通过（57.6 MB）。
+- Android release APK：构建通过（67.15 MB）。
+- Android release AAB：构建通过（57.54 MB）。
 - 包名：`cc.saidian.app`
 - 版本：`0.1.0+1`
 - Android：`minSdk 26`、`targetSdk 36`、`compileSdk 36`
@@ -21,8 +22,8 @@
 
 校验值：
 
-- release APK SHA-256：`605051AC093AE316E7826293E21518654C60E306842FA35FBDB3A1F69E06F0F2`
-- release AAB SHA-256：`4F6F0871D856B01E7D1A424C4E9408DCDF69FE77622C611EA45A0300F01F7C63`
+- release APK SHA-256：`C382975530E7897B457AE9B8AF6731E534CA7FEC2B46BD10AB4906EADFDFADD3`
+- release AAB SHA-256：`D18151A2373B02CFF520D60C119431D8421DE54CEA6F0D34312F5DF2D837915E`
 
 ## 尚未闭环
 

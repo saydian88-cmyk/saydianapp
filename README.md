@@ -7,7 +7,7 @@ Swift/Objective-C 适配 Veepoo SDK；Flutter 层共享页面、状态机、健�
 ## 当前可用范围
 
 - 账号登录、注册和安全会话存储
-- 健康首页、核心指标空态与历史记录展示
+- 按蓝湖设计稿统一的登录、健康首页、指标、设备、关爱和个人中心界面
 - 设备扫描、连接、能力读取、同步和测量的统一 MethodChannel 契约
 - SQLCipher 本地健康数据库与 200 条/批的幂等补传队列
 - 远程关爱隐私默认模型：未接受、未逐项授权时不共享
@@ -40,6 +40,7 @@ Token 和密码不得提交到代码库；合作方 SDK 二进制仅随本私有
 
 ```powershell
 & $flutter build apk --debug
+& $flutter build apk --release
 & $flutter build appbundle --release
 ```
 

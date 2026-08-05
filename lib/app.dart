@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'services/app_controller.dart';
+import 'ui/app_theme.dart';
 import 'ui/pages.dart';
 
 class SaydianApp extends StatelessWidget {
@@ -10,28 +11,10 @@ class SaydianApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const seed = Color(0xFF116B68);
     return MaterialApp(
       title: 'Saydian 赛电',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: seed,
-          brightness: Brightness.light,
-        ),
-        scaffoldBackgroundColor: const Color(0xFFF5F7F6),
-        useMaterial3: true,
-        cardTheme: const CardThemeData(
-          elevation: 0,
-          margin: EdgeInsets.zero,
-          color: Colors.white,
-        ),
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
-          filled: true,
-          fillColor: Colors.white,
-        ),
-      ),
+      theme: buildSaydianTheme(),
       home: ListenableBuilder(
         listenable: controller,
         builder: (context, _) {
@@ -54,16 +37,50 @@ class _BootPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('正在安全加载本地数据…'),
-          ],
+      body: DecoratedBox(
+        decoration: BoxDecoration(gradient: saydianSoftGradient),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _BootLogo(),
+              SizedBox(height: 26),
+              SizedBox.square(
+                dimension: 22,
+                child: CircularProgressIndicator(strokeWidth: 2.4),
+              ),
+              SizedBox(height: 14),
+              Text('正在安全加载本地数据…'),
+            ],
+          ),
         ),
       ),
+    );
+  }
+}
+
+class _BootLogo extends StatelessWidget {
+  const _BootLogo();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Container(
+          width: 72,
+          height: 72,
+          decoration: const BoxDecoration(
+            color: SaydianColors.ink,
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.bolt_rounded, color: Colors.white, size: 42),
+        ),
+        const SizedBox(height: 12),
+        const Text(
+          '赛电',
+          style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
+        ),
+      ],
     );
   }
 }
