@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'feature_models.dart';
+
 enum DeviceConnectionState {
   disconnected,
   scanning,
@@ -19,6 +21,7 @@ enum HealthMetric {
   heartRate('heart_rate', '心率', 'bpm'),
   bloodOxygen('blood_oxygen', '血氧', '%'),
   bloodPressure('blood_pressure', '血压', 'mmHg'),
+  bloodGlucose('blood_glucose', '血糖', 'mmol/L'),
   bodyTemperature('body_temperature', '体温', '℃'),
   ecg('ecg', '心电', ''),
   hrv('hrv', 'HRV', 'ms'),
@@ -38,6 +41,50 @@ enum HealthMetric {
 }
 
 enum MeasurementSource { wearable, manual, imported }
+
+enum SportMode {
+  running('running', '跑步'),
+  walking('walking', '步行'),
+  cycling('cycling', '骑行'),
+  hiking('hiking', '徒步');
+
+  const SportMode(this.wireName, this.label);
+
+  final String wireName;
+  final String label;
+
+  static SportMode fromWire(String value) => values.firstWhere(
+    (mode) => mode.wireName == value,
+    orElse: () => SportMode.running,
+  );
+}
+
+class SportRecord {
+  const SportRecord({
+    required this.id,
+    required this.mode,
+    required this.startedAt,
+    required this.durationSeconds,
+    required this.distanceKm,
+    required this.calories,
+  });
+
+  final String id;
+  final SportMode mode;
+  final DateTime? startedAt;
+  final int durationSeconds;
+  final double distanceKm;
+  final double calories;
+
+  factory SportRecord.fromMap(Map<Object?, Object?> map) => SportRecord(
+    id: '${map['id'] ?? ''}',
+    mode: SportMode.fromWire('${map['mode'] ?? 'running'}'),
+    startedAt: DateTime.tryParse('${map['startedAt'] ?? ''}'),
+    durationSeconds: (map['durationSeconds'] as num?)?.toInt() ?? 0,
+    distanceKm: (map['distanceKm'] as num?)?.toDouble() ?? 0,
+    calories: (map['calories'] as num?)?.toDouble() ?? 0,
+  );
+}
 
 class DeviceInfo {
   const DeviceInfo({
@@ -79,15 +126,70 @@ class DeviceInfo {
   };
 }
 
+class WearableUserProfile {
+  const WearableUserProfile({
+    required this.gender,
+    required this.heightCm,
+    required this.weightKg,
+    required this.birthYear,
+    required this.age,
+    required this.targetSteps,
+  });
+
+  final int gender;
+  final int heightCm;
+  final int weightKg;
+  final int birthYear;
+  final int age;
+  final int targetSteps;
+
+  factory WearableUserProfile.fromMember(
+    Map<String, Object?> member, {
+    required int targetSteps,
+  }) {
+    final birthday = DateTime.tryParse('${member['birthday'] ?? ''}');
+    final now = DateTime.now();
+    var age = birthday == null ? 30 : now.year - birthday.year;
+    if (birthday != null &&
+        (now.month < birthday.month ||
+            (now.month == birthday.month && now.day < birthday.day))) {
+      age--;
+    }
+    return WearableUserProfile(
+      gender: (int.tryParse('${member['gender'] ?? 1}') ?? 1).clamp(1, 2),
+      heightCm: (num.tryParse('${member['height'] ?? ''}')?.round() ?? 175)
+          .clamp(80, 240),
+      weightKg: (num.tryParse('${member['weight'] ?? ''}')?.round() ?? 70)
+          .clamp(20, 250),
+      birthYear: (birthday?.year ?? (now.year - 30)).clamp(1900, now.year),
+      age: age.clamp(5, 120),
+      targetSteps: targetSteps.clamp(1000, 100000),
+    );
+  }
+
+  Map<String, Object?> toMap() => {
+    'gender': gender,
+    'heightCm': heightCm,
+    'weightKg': weightKg,
+    'birthYear': birthYear,
+    'age': age,
+    'targetSteps': targetSteps,
+  };
+}
+
 class DeviceCapabilities {
   const DeviceCapabilities({
     required this.metrics,
+    this.features = const <DeviceFeature>{},
+    this.integratedFeatures = const <DeviceFeature>{},
     this.supportsBackgroundSync = false,
     this.supportsWatchFaces = false,
     this.supportsOta = false,
   });
 
   final Set<HealthMetric> metrics;
+  final Set<DeviceFeature> features;
+  final Set<DeviceFeature> integratedFeatures;
   final bool supportsBackgroundSync;
   final bool supportsWatchFaces;
   final bool supportsOta;
@@ -97,8 +199,27 @@ class DeviceCapabilities {
     final metrics = raw is List
         ? raw.map((value) => HealthMetric.fromWire('$value')).toSet()
         : <HealthMetric>{};
+    final rawFeatures = map['features'];
+    final features = rawFeatures is List
+        ? rawFeatures
+              .map((value) => DeviceFeature.tryFromWire('$value'))
+              .whereType<DeviceFeature>()
+              .toSet()
+        : <DeviceFeature>{};
+    if (map['supportsWatchFaces'] == true) {
+      features.add(DeviceFeature.watchFaces);
+    }
+    final rawIntegratedFeatures = map['integratedFeatures'];
+    final integratedFeatures = rawIntegratedFeatures is List
+        ? rawIntegratedFeatures
+              .map((value) => DeviceFeature.tryFromWire('$value'))
+              .whereType<DeviceFeature>()
+              .toSet()
+        : <DeviceFeature>{DeviceFeature.healthMonitoring};
     return DeviceCapabilities(
       metrics: metrics,
+      features: features,
+      integratedFeatures: integratedFeatures,
       supportsBackgroundSync: map['supportsBackgroundSync'] == true,
       supportsWatchFaces: map['supportsWatchFaces'] == true,
       supportsOta: map['supportsOta'] == true,
@@ -107,8 +228,14 @@ class DeviceCapabilities {
 
   bool supports(HealthMetric metric) => metrics.contains(metric);
 
+  bool supportsFeature(DeviceFeature feature) => features.contains(feature);
+
   Map<String, Object?> toJson() => {
     'metrics': metrics.map((metric) => metric.wireName).toList(),
+    'features': features.map((feature) => feature.wireName).toList(),
+    'integratedFeatures': integratedFeatures
+        .map((feature) => feature.wireName)
+        .toList(),
     'supportsBackgroundSync': supportsBackgroundSync,
     'supportsWatchFaces': supportsWatchFaces,
     'supportsOta': supportsOta,
@@ -278,8 +405,16 @@ class WearableEvent {
   final String type;
   final Map<String, Object?> payload;
 
-  factory WearableEvent.fromMap(Map<Object?, Object?> map) => WearableEvent(
-    type: '${map['type'] ?? 'unknown'}',
-    payload: map.map((key, value) => MapEntry('$key', value)),
-  );
+  factory WearableEvent.fromMap(Map<Object?, Object?> map) {
+    final rawPayload = map['payload'];
+    final payloadSource = rawPayload is Map
+        ? Map<Object?, Object?>.from(rawPayload)
+        : Map<Object?, Object?>.fromEntries(
+            map.entries.where((entry) => entry.key != 'type'),
+          );
+    return WearableEvent(
+      type: '${map['type'] ?? 'unknown'}',
+      payload: payloadSource.map((key, value) => MapEntry('$key', value)),
+    );
+  }
 }

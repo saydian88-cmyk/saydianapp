@@ -30,6 +30,14 @@
 	<string>用于连接赛电智能手表并同步您主动授权的健康数据。</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>用于连接赛电智能手表并同步您主动授权的健康数据。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍摄和设置手表照片表盘。</string>
+	<key>NSContactsUsageDescription</key>
+	<string>用于在您授权后将选定联系人同步到手表。</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>用于获取所在城市并将天气同步到手表。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于选择并设置手表照片表盘。</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>

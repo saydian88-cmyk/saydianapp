@@ -32,6 +32,8 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
+/android/build/
+/artifacts/
 
 # Symbolication related
 app.*.symbols
@@ -56,6 +58,7 @@ app.*.map.json
 *.p12
 *.mobileprovision
 /android/app/libs/*.aar
+!/android/app/libs/vpprotocol-2.3.77.15.aar
 /android/app/libs/*.jar
 /ios/Runner/Vendor/*.framework/
 /ios/Runner/Vendor/*.xcframework/

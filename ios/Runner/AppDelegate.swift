@@ -55,7 +55,7 @@ import VeepooBleSDK
     result: @escaping FlutterResult
   ) {
     guard let adapter = wearableAdapter else {
-      result(FlutterError(code: "SDK_NOT_CONFIGURED", message: "Veepoo SDK 未初始化", details: nil))
+      result(FlutterError(code: "SDK_NOT_CONFIGURED", message: "设备连接服务暂时无法使用", details: nil))
       return
     }
     let arguments = call.arguments as? [String: Any]
@@ -63,7 +63,11 @@ import VeepooBleSDK
     case "scanDevices":
       adapter.scanDevices(result)
     case "connect":
-      adapter.connect(arguments?["deviceId"] as? String ?? "", result: result)
+      adapter.connect(
+        arguments?["deviceId"] as? String ?? "",
+        profile: arguments?["profile"] as? [String: Any] ?? [:],
+        result: result
+      )
     case "disconnect":
       adapter.disconnect(result)
     case "getCapabilities":
@@ -74,6 +78,38 @@ import VeepooBleSDK
       adapter.startMeasurement(arguments?["metric"] as? String ?? "", result: result)
     case "stopMeasurement":
       adapter.stopMeasurement(arguments?["metric"] as? String ?? "", result: result)
+    case "startSport":
+      adapter.startSport(arguments?["mode"] as? String ?? "", result: result)
+    case "stopSport":
+      adapter.stopSport(result)
+    case "readSportRecords":
+      adapter.readSportRecords(result)
+    case "readAutoMeasureSettings":
+      adapter.readAutoMeasureSettings(result)
+    case "setAutoMeasureSetting":
+      adapter.setAutoMeasureSetting(
+        arguments?["type"] as? String ?? "",
+        enabled: arguments?["enabled"] as? Bool ?? false,
+        result: result
+      )
+    case "readHeartRateWarning":
+      adapter.readHeartRateWarning(result)
+    case "setHeartRateWarning":
+      adapter.setHeartRateWarning(arguments?["value"] as? Int ?? 120, result: result)
+    case "readDeviceFeature":
+      adapter.readDeviceFeature(arguments?["feature"] as? String ?? "", result: result)
+    case "writeDeviceFeature":
+      adapter.writeDeviceFeature(
+        arguments?["feature"] as? String ?? "",
+        values: arguments?["values"] as? [String: Any] ?? [:],
+        result: result
+      )
+    case "triggerDeviceAction":
+      adapter.triggerDeviceAction(
+        arguments?["feature"] as? String ?? "",
+        enabled: arguments?["enabled"] as? Bool ?? true,
+        result: result
+      )
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -82,26 +118,72 @@ import VeepooBleSDK
 
 private protocol WearableAdapter: AnyObject {
   func scanDevices(_ result: @escaping FlutterResult)
-  func connect(_ deviceID: String, result: @escaping FlutterResult)
+  func connect(
+    _ deviceID: String,
+    profile: [String: Any],
+    result: @escaping FlutterResult
+  )
   func disconnect(_ result: @escaping FlutterResult)
   func capabilities() -> [String: Any]
   func syncHealthData(cursor: String?, result: @escaping FlutterResult)
   func startMeasurement(_ metric: String, result: @escaping FlutterResult)
   func stopMeasurement(_ metric: String, result: @escaping FlutterResult)
+  func startSport(_ mode: String, result: @escaping FlutterResult)
+  func stopSport(_ result: @escaping FlutterResult)
+  func readSportRecords(_ result: @escaping FlutterResult)
+  func readAutoMeasureSettings(_ result: @escaping FlutterResult)
+  func setAutoMeasureSetting(_ type: String, enabled: Bool, result: @escaping FlutterResult)
+  func readHeartRateWarning(_ result: @escaping FlutterResult)
+  func setHeartRateWarning(_ value: Int, result: @escaping FlutterResult)
+  func readDeviceFeature(_ feature: String, result: @escaping FlutterResult)
+  func writeDeviceFeature(
+    _ feature: String,
+    values: [String: Any],
+    result: @escaping FlutterResult
+  )
+  func triggerDeviceAction(
+    _ feature: String,
+    enabled: Bool,
+    result: @escaping FlutterResult
+  )
 }
 
 private final class UnconfiguredWearableAdapter: WearableAdapter {
   private func missing(_ result: @escaping FlutterResult) {
-    result(FlutterError(code: "SDK_NOT_CONFIGURED", message: "Veepoo Framework 未配置", details: nil))
+    result(FlutterError(code: "SDK_NOT_CONFIGURED", message: "设备连接服务暂时无法使用", details: nil))
   }
 
   func scanDevices(_ result: @escaping FlutterResult) { missing(result) }
-  func connect(_ deviceID: String, result: @escaping FlutterResult) { missing(result) }
+  func connect(
+    _ deviceID: String,
+    profile: [String: Any],
+    result: @escaping FlutterResult
+  ) { missing(result) }
   func disconnect(_ result: @escaping FlutterResult) { missing(result) }
   func capabilities() -> [String: Any] { [:] }
   func syncHealthData(cursor: String?, result: @escaping FlutterResult) { missing(result) }
   func startMeasurement(_ metric: String, result: @escaping FlutterResult) { missing(result) }
   func stopMeasurement(_ metric: String, result: @escaping FlutterResult) { missing(result) }
+  func startSport(_ mode: String, result: @escaping FlutterResult) { missing(result) }
+  func stopSport(_ result: @escaping FlutterResult) { missing(result) }
+  func readSportRecords(_ result: @escaping FlutterResult) { missing(result) }
+  func readAutoMeasureSettings(_ result: @escaping FlutterResult) { missing(result) }
+  func setAutoMeasureSetting(_ type: String, enabled: Bool, result: @escaping FlutterResult) {
+    missing(result)
+  }
+  func readHeartRateWarning(_ result: @escaping FlutterResult) { missing(result) }
+  func setHeartRateWarning(_ value: Int, result: @escaping FlutterResult) { missing(result) }
+  func readDeviceFeature(_ feature: String, result: @escaping FlutterResult) { missing(result) }
+  func writeDeviceFeature(
+    _ feature: String,
+    values: [String: Any],
+    result: @escaping FlutterResult
+  ) { missing(result) }
+  func triggerDeviceAction(
+    _ feature: String,
+    enabled: Bool,
+    result: @escaping FlutterResult
+  ) { missing(result) }
 }
 
 #if canImport(VeepooBleSDK)
@@ -112,6 +194,7 @@ private final class VeepooWearableAdapter: WearableAdapter {
   private var connected: VPPeripheralModel?
   private var scanResult: FlutterResult?
   private var connectResult: FlutterResult?
+  private var userProfile: [String: Any] = [:]
 
   init(events: WearableStreamHandler) {
     self.events = events
@@ -163,12 +246,17 @@ private final class VeepooWearableAdapter: WearableAdapter {
     }
   }
 
-  func connect(_ deviceID: String, result: @escaping FlutterResult) {
+  func connect(
+    _ deviceID: String,
+    profile: [String: Any],
+    result: @escaping FlutterResult
+  ) {
     guard let model = scanned[deviceID] else {
       result(FlutterError(code: "DEVICE_NOT_FOUND", message: "设备已离开扫描范围，请重新扫描", details: nil))
       return
     }
     connectResult = result
+    userProfile = profile
     connected = model
     emit("state", ["value": "connecting"])
     manager.veepooSDKStopScanDevice()
@@ -184,11 +272,11 @@ private final class VeepooWearableAdapter: WearableAdapter {
     guard connectResult != nil else { return }
     emit("state", ["value": "syncing"])
     manager.peripheralManage.veepooSDKSynchronousPersonalInformation(
-      withStature: 175,
-      weight: 70,
-      birth: 1990,
-      sex: 1,
-      targetStep: 8000
+      withStature: profileInt("heightCm", fallback: 175),
+      weight: profileInt("weightKg", fallback: 70),
+      birth: profileInt("birthYear", fallback: 1990),
+      sex: profileInt("gender", fallback: 1),
+      targetStep: profileInt("targetSteps", fallback: 8000)
     ) { [weak self] status in
       guard let self, let callback = self.connectResult else { return }
       self.connectResult = nil
@@ -220,6 +308,8 @@ private final class VeepooWearableAdapter: WearableAdapter {
     guard let model = connected else {
       return [
         "metrics": ["steps", "distance", "calories", "sleep"],
+        "features": ["health_monitoring"],
+        "integratedFeatures": ["health_monitoring"],
         "supportsBackgroundSync": true,
         "supportsWatchFaces": false,
         "supportsOta": false,
@@ -230,10 +320,29 @@ private final class VeepooWearableAdapter: WearableAdapter {
     if model.bloodPressureType > 0 { metrics.append("blood_pressure") }
     if model.bloodOxygenType > 0 || model.oxygenType > 0 { metrics.append("blood_oxygen") }
     if model.temperatureType > 0 { metrics.append("body_temperature") }
+    if model.bloodGlucoseType > 0 { metrics.append("blood_glucose") }
+    if model.ecgType > 0 { metrics.append("ecg") }
+    if model.hrvType > 0 { metrics.append("hrv") }
+    if model.bodyCompositionType > 0 { metrics.append("body_composition") }
+    if model.bloodAnalysisType > 0 { metrics.append("blood_composition") }
+    var features = ["health_monitoring"]
+    if model.dialCount > 0 || model.marketDialCount > 0 { features.append("watch_faces") }
+    if model.photoDialCount > 0 { features.append("photo_watch_face") }
+    if model.searchDeviceFunction > 0 { features.append("find_watch") }
+    if model.contactType > 0 { features.append("contacts") }
+    if model.deviceAncsData.count > 0 { features.append("notifications") }
+    if model.weatherType > 0 { features.append("weather") }
+    if model.worldClockType > 0 { features.append("world_clock") }
+    if model.screenTypes > 0 || model.screenDurationType > 0 { features.append("screen_display") }
+    if model.healthGlanceType > 0 {
+      features.append("health_assessment")
+    }
     return [
       "metrics": metrics,
+      "features": features,
+      "integratedFeatures": ["health_monitoring"],
       "supportsBackgroundSync": true,
-      "supportsWatchFaces": false,
+      "supportsWatchFaces": features.contains("watch_faces"),
       "supportsOta": false,
     ]
   }
@@ -312,6 +421,94 @@ private final class VeepooWearableAdapter: WearableAdapter {
     result(nil)
   }
 
+  func startSport(_ mode: String, result: @escaping FlutterResult) {
+    result(FlutterError(
+      code: "SPORT_NOT_CONFIGURED",
+      message: "此功能暂时无法使用，请稍后再试",
+      details: nil
+    ))
+  }
+
+  func stopSport(_ result: @escaping FlutterResult) {
+    result(FlutterError(
+      code: "SPORT_NOT_CONFIGURED",
+      message: "此功能暂时无法使用，请稍后再试",
+      details: nil
+    ))
+  }
+
+  func readSportRecords(_ result: @escaping FlutterResult) {
+    result(FlutterError(
+      code: "SPORT_NOT_CONFIGURED",
+      message: "此功能暂时无法使用，请稍后再试",
+      details: nil
+    ))
+  }
+
+  func readAutoMeasureSettings(_ result: @escaping FlutterResult) {
+    result(FlutterError(
+      code: "DEVICE_SETTINGS_NOT_CONFIGURED",
+      message: "此功能暂时无法使用，请稍后再试",
+      details: nil
+    ))
+  }
+
+  func setAutoMeasureSetting(_ type: String, enabled: Bool, result: @escaping FlutterResult) {
+    result(FlutterError(
+      code: "DEVICE_SETTINGS_NOT_CONFIGURED",
+      message: "此功能暂时无法使用，请稍后再试",
+      details: nil
+    ))
+  }
+
+  func readHeartRateWarning(_ result: @escaping FlutterResult) {
+    result(FlutterError(
+      code: "DEVICE_SETTINGS_NOT_CONFIGURED",
+      message: "此功能暂时无法使用，请稍后再试",
+      details: nil
+    ))
+  }
+
+  func setHeartRateWarning(_ value: Int, result: @escaping FlutterResult) {
+    result(FlutterError(
+      code: "DEVICE_SETTINGS_NOT_CONFIGURED",
+      message: "此功能暂时无法使用，请稍后再试",
+      details: nil
+    ))
+  }
+
+  func readDeviceFeature(_ feature: String, result: @escaping FlutterResult) {
+    result(FlutterError(
+      code: "FEATURE_UNAVAILABLE",
+      message: "此功能暂时无法使用，请稍后再试",
+      details: nil
+    ))
+  }
+
+  func writeDeviceFeature(
+    _ feature: String,
+    values: [String: Any],
+    result: @escaping FlutterResult
+  ) {
+    result(FlutterError(
+      code: "FEATURE_UNAVAILABLE",
+      message: "此功能暂时无法使用，请稍后再试",
+      details: nil
+    ))
+  }
+
+  func triggerDeviceAction(
+    _ feature: String,
+    enabled: Bool,
+    result: @escaping FlutterResult
+  ) {
+    result(FlutterError(
+      code: "FEATURE_UNAVAILABLE",
+      message: "此功能暂时无法使用，请稍后再试",
+      details: nil
+    ))
+  }
+
   private func recordsFromDatabase() -> [[String: Any]] {
     guard let model = connected else { return [] }
     let tableID = model.deviceAddress
@@ -325,7 +522,7 @@ private final class VeepooWearableAdapter: WearableAdapter {
       VPDataBaseOperation.veepooSDKGetStepData(
         withDate: dateString,
         andTableID: tableID,
-        changeUserStature: 175
+        changeUserStature: profileInt("heightCm", fallback: 175)
       ) { [weak self] dictionary in
         guard let self, let dictionary else { return }
         if let value = Self.number(dictionary["Step"]), value > 0 {
@@ -421,6 +618,12 @@ private final class VeepooWearableAdapter: WearableAdapter {
       "source": "wearable",
       "rawVersion": 1,
     ]
+  }
+
+  private func profileInt(_ key: String, fallback: Int) -> Int {
+    if let value = userProfile[key] as? NSNumber { return value.intValue }
+    if let value = userProfile[key] as? String, let parsed = Int(value) { return parsed }
+    return fallback
   }
 
   private func emit(_ type: String, _ payload: [String: Any]) {

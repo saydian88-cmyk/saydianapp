@@ -7,7 +7,9 @@ Swift/Objective-C 适配 Veepoo SDK；Flutter 层共享页面、状态机、健�
 ## 当前可用范围
 
 - 账号登录、注册和安全会话存储
-- 按蓝湖设计稿统一的登录、健康首页、指标、设备、关爱和个人中心界面
+- 首页、健康、AI、设备、我的五栏导航及原型/小程序对应页面
+- 健康页跑步、步行、骑行、徒步和运动记录，Android 直连 Veepoo 运动模式
+- AI 健康/运动管家、健康百科、订单、目标、个人资料、地址和权限管理接口
 - 设备扫描、连接、能力读取、同步和测量的统一 MethodChannel 契约
 - SQLCipher 本地健康数据库与 200 条/批的幂等补传队列
 - 远程关爱隐私默认模型：未接受、未逐项授权时不共享
@@ -17,8 +19,8 @@ Swift/Objective-C 适配 Veepoo SDK；Flutter 层共享页面、状态机、健�
 
 Veepoo 合作客户授权已确认，小程序源码和官方 Android/iOS SDK 已锁定到工程。
 双端原生桥已实现扫描、连接、密码校验、个人信息同步、能力识别、历史健康数据同步及
-心率、血氧、血压、体温手动测量；指标按设备实际能力动态开放。具体版本及调用顺序见
-接入说明。
+心率、血氧、血压、体温手动测量，并支持运动记录与自动检测开关；指标按设备实际能力
+动态开放。具体版本及调用顺序见接入说明。
 
 关爱模块已支持现有 `GET /api/v1/member/care` 和
 `POST /api/v1/member/care`（Bearer + multipart `mobile`）。审核、逐指标授权、
@@ -51,12 +53,17 @@ cd ios && pod install && cd ..
 flutter build ios --release --no-codesign
 ```
 
+Windows 开发机可通过 GitHub Actions 生成已签名的 Ad Hoc IPA，证书、描述文件、
+触发方式及安装步骤见 [Windows 与 GitHub Actions iOS 打包说明](docs/github-actions-ios.md)。
+
 正式签名、TestFlight 和商店提交需要另行配置 Apple Developer、Android 商店签名、
 隐私政策、用户协议和推送/支付材料。
 
 ## 接入闸门
 
-- [开发交接说明](docs/HANDOFF.md)
+- [最新开发交接说明（2026-08-12）](docs/HANDOFF-20260812.md)
+- [上一版开发交接说明（2026-08-11）](docs/HANDOFF-20260811.md)
+- [历史开发交接说明（2026-08-05）](docs/HANDOFF.md)
 - [Veepoo 原生 SDK 接入说明](docs/veepoo-integration.md)
 - [现有后台 API 缺口](docs/api-gap.md)
 - 小程序源码已提供；目标手表型号/固件和双端量产样机实测仍待完成

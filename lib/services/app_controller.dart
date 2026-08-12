@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart' as platform_info;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../domain/device_state_machine.dart';
+import '../domain/feature_models.dart';
 import '../domain/models.dart';
 import 'api_client.dart';
 import 'local_health_store.dart';
@@ -38,21 +40,51 @@ class AppController extends ChangeNotifier {
   StreamSubscription<DeviceConnectionState>? _deviceStates;
   StreamSubscription<List<ConnectivityResult>>? _connectivity;
   bool _syncing = false;
+  bool _disposed = false;
+  int _deviceSyncGeneration = 0;
+  DeviceInfo? _latestDeviceDetails;
+  String? _deviceSyncErrorMessage;
 
   bool isBooting = true;
   bool isBusy = false;
+  bool isDeviceSyncing = false;
+  double deviceSyncProgress = 0;
   bool isPreviewMode = false;
   Session? session;
   int selectedTab = 0;
   String? errorMessage;
-  String storageStatus = '正在初始化';
-  String sdkStatus = '等待检测';
+  String storageStatus = '正在准备数据';
+  String sdkStatus = '等待连接';
   String syncStatus = '尚未同步';
   DeviceInfo? connectedDevice;
   DeviceCapabilities? capabilities;
+  SportMode? activeSport;
   List<DeviceInfo> scannedDevices = const [];
   List<HealthRecord> healthRecords = const [];
+  List<SportRecord> sportRecords = const [];
   List<Map<String, Object?>> careMembers = const [];
+  List<Map<String, Object?>> aiArticles = const [];
+  List<Map<String, Object?>> aiMessages = const [];
+  List<Map<String, Object?>> notifications = const [];
+  List<Map<String, Object?>> orders = const [];
+  List<Map<String, Object?>> addresses = const [];
+  Map<String, Object?> memberProfile = const {};
+  final Map<int, String> _aiSessionIds = {};
+  String aiStatus = '等待加载';
+  String notificationStatus = '等待加载';
+  String orderStatus = '等待加载';
+  int stepGoal = 10000;
+  double distanceGoal = 6;
+  int calorieGoal = 800;
+  String distanceUnit = '公里';
+  String temperatureUnit = '摄氏度（℃）';
+  Map<String, bool> autoMeasureSettings = const {};
+  Map<DeviceFeature, Map<String, Object?>> deviceFeatureData = const {};
+  Set<DeviceFeature> deviceFeatureBusy = const {};
+  int cameraShutterSequence = 0;
+  int heartRateWarning = 120;
+  bool heartRateWarningSupported = false;
+  String deviceSettingsStatus = '连接手表后可读取';
 
   bool get isAuthenticated => session != null;
   DeviceConnectionState get deviceState => deviceMachine.state;
@@ -75,15 +107,15 @@ class AppController extends ChangeNotifier {
     });
     try {
       await _healthStore.initialize();
-      storageStatus = '本地加密存储已就绪';
+      storageStatus = '数据已安全保存在本机';
       healthRecords = await _healthStore.recent();
     } catch (_) {
-      storageStatus = '本地加密存储未配置';
+      storageStatus = '本机数据暂时无法读取';
     }
     try {
       session = await _vault.readSession();
       if (session?.isExpired ?? false) {
-        errorMessage = '登录已过期；Token 刷新接口未配置，请重新登录';
+        errorMessage = '登录状态已过期，请重新登录';
         await _vault.clearSession();
         session = null;
       }
@@ -94,17 +126,20 @@ class AppController extends ChangeNotifier {
       _wearableEvents = _wearable.events.listen(
         _handleWearableEvent,
         onError: (_) {
-          sdkStatus = 'Veepoo SDK 未配置';
+          sdkStatus = '设备连接服务暂时不可用';
           notifyListeners();
         },
       );
     } catch (_) {
-      sdkStatus = 'Veepoo SDK 未配置';
+      sdkStatus = '设备连接服务暂时不可用';
     }
     isBooting = false;
     notifyListeners();
+    unawaited(refreshAiArticles());
     if (session != null) {
       unawaited(refreshCare());
+      unawaited(refreshMemberProfile());
+      unawaited(refreshActivityGoals());
     }
   }
 
@@ -118,6 +153,8 @@ class AppController extends ChangeNotifier {
       session = await _api.login(username.trim(), password);
       isPreviewMode = false;
       await refreshCare();
+      await refreshMemberProfile();
+      await refreshActivityGoals();
     });
   }
 
@@ -127,14 +164,17 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       return false;
     }
-    if (password.length < 8) {
-      errorMessage = '密码至少需要 8 位';
+    if (password.length < 6) {
+      errorMessage = '密码至少需要 6 位';
       notifyListeners();
       return false;
     }
     return _guard(() async {
       session = await _api.register(mobile.trim(), password);
       isPreviewMode = false;
+      await refreshCare();
+      await refreshMemberProfile();
+      await refreshActivityGoals();
     });
   }
 
@@ -154,10 +194,16 @@ class AppController extends ChangeNotifier {
         await _vault.clearSession();
       }
     } on ApiException catch (error) {
-      errorMessage = error.message;
+      errorMessage = _apiErrorMessage(error, fallback: '退出失败，请稍后重试');
     } finally {
       session = null;
       isPreviewMode = false;
+      memberProfile = const {};
+      aiMessages = const [];
+      _aiSessionIds.clear();
+      notifications = const [];
+      orders = const [];
+      addresses = const [];
       selectedTab = 0;
       isBusy = false;
       notifyListeners();
@@ -181,9 +227,10 @@ class AppController extends ChangeNotifier {
 
   Future<void> scanDevices() async {
     errorMessage = null;
+    scannedDevices = const [];
     try {
       if (!await _ensureBluetoothPermissions()) {
-        errorMessage = '蓝牙权限未授权，无法扫描附近手表';
+        errorMessage = '允许相关权限后使用';
         notifyListeners();
         return;
       }
@@ -191,18 +238,44 @@ class AppController extends ChangeNotifier {
         deviceMachine.transition(DeviceConnectionState.disconnected);
       }
       deviceMachine.transition(DeviceConnectionState.scanning);
-      scannedDevices = await _wearable.scanDevices();
-      sdkStatus = 'Veepoo SDK 已加载';
-      deviceMachine.transition(DeviceConnectionState.disconnected);
-    } on WearableSdkNotConfigured catch (error) {
-      sdkStatus = 'Veepoo SDK 未配置';
-      errorMessage = error.message;
+      notifyListeners();
+      final completedDevices = await _wearable.scanDevices();
+      for (final device in completedDevices) {
+        _upsertScannedDevice(device);
+      }
+      sdkStatus = '设备连接服务可用';
+      if (deviceState == DeviceConnectionState.scanning) {
+        deviceMachine.transition(DeviceConnectionState.disconnected);
+      }
+    } on WearableSdkNotConfigured catch (_) {
+      sdkStatus = '设备连接服务暂时不可用';
+      errorMessage = '此功能暂时无法使用，请稍后再试';
+      deviceMachine.transition(DeviceConnectionState.error);
+    } on PlatformException catch (error) {
+      errorMessage = _wearableErrorMessage(error, fallback: '暂时无法查找手表');
       deviceMachine.transition(DeviceConnectionState.error);
     } catch (_) {
-      errorMessage = '扫描设备失败，请检查蓝牙和系统权限';
+      errorMessage = '暂时无法查找手表，请稍后重试';
       deviceMachine.transition(DeviceConnectionState.error);
     }
     notifyListeners();
+  }
+
+  Future<void> stopDeviceScan() async {
+    if (deviceState != DeviceConnectionState.scanning) return;
+    try {
+      await _wearable.stopScan();
+    } catch (_) {
+      // Leaving the search page must remain possible even if the SDK has
+      // already stopped the scan by timeout.
+    } finally {
+      if (!_disposed) {
+        if (deviceState == DeviceConnectionState.scanning) {
+          deviceMachine.transition(DeviceConnectionState.disconnected);
+        }
+        notifyListeners();
+      }
+    }
   }
 
   Future<bool> _ensureBluetoothPermissions() async {
@@ -217,40 +290,158 @@ class AppController extends ChangeNotifier {
 
   Future<void> connectDevice(DeviceInfo device) async {
     errorMessage = null;
+    _invalidateDeviceSync();
+    _latestDeviceDetails = null;
     try {
       if (deviceState == DeviceConnectionState.error) {
         deviceMachine.transition(DeviceConnectionState.disconnected);
       }
-      deviceMachine.transition(DeviceConnectionState.connecting);
-      await _wearable.connect(device.id);
+      if (deviceState == DeviceConnectionState.scanning) {
+        deviceMachine.transition(DeviceConnectionState.connecting);
+        await _wearable.stopScan();
+      } else {
+        deviceMachine.transition(DeviceConnectionState.connecting);
+      }
+      await _wearable.connect(
+        device.id,
+        profile: WearableUserProfile.fromMember(
+          memberProfile,
+          targetSteps: stepGoal,
+        ),
+      );
+      connectedDevice = _mergeDeviceDetails(device);
       deviceMachine.transition(DeviceConnectionState.authenticating);
-      capabilities = await _wearable.getCapabilities();
+      try {
+        capabilities = await _wearable.getCapabilities();
+      } catch (error) {
+        capabilities = const DeviceCapabilities(
+          metrics: {
+            HealthMetric.steps,
+            HealthMetric.distance,
+            HealthMetric.calories,
+            HealthMetric.sleep,
+          },
+          features: {DeviceFeature.healthMonitoring},
+          integratedFeatures: {DeviceFeature.healthMonitoring},
+        );
+        errorMessage = '手表已连接，部分功能暂时无法显示';
+      }
       deviceMachine.transition(DeviceConnectionState.syncing);
-      final cursor = await _healthStore.readCursor();
-      final records = await _wearable.syncHealthData(cursor: cursor);
-      await _healthStore.upsert(records);
-      connectedDevice = device;
-      healthRecords = await _healthStore.recent();
+      syncStatus = '正在同步设备数据';
       deviceMachine.transition(DeviceConnectionState.ready);
-      syncStatus = records.isEmpty ? '设备暂无新数据' : '已同步 ${records.length} 条';
-      unawaited(synchronizeCloud());
-    } on WearableSdkNotConfigured catch (error) {
-      sdkStatus = 'Veepoo SDK 未配置';
-      errorMessage = error.message;
+      // Authentication is the connection boundary. Historical data is a
+      // background follow-up and must not keep the add-device page spinning.
+      unawaited(_syncInitialDeviceData(device.id));
+    } on WearableSdkNotConfigured catch (_) {
+      sdkStatus = '设备连接服务暂时不可用';
+      errorMessage = '此功能暂时无法使用，请稍后再试';
       deviceMachine.transition(DeviceConnectionState.error);
+    } on PlatformException catch (error) {
+      if (error.code == 'CONNECT_CANCELLED') {
+        errorMessage = null;
+        if (deviceState != DeviceConnectionState.disconnected) {
+          deviceMachine.transition(DeviceConnectionState.disconnected);
+        }
+      } else {
+        errorMessage = _wearableErrorMessage(error, fallback: '设备连接失败');
+        deviceMachine.transition(DeviceConnectionState.error);
+      }
     } catch (_) {
-      errorMessage = '连接失败，请靠近手表后重试';
+      errorMessage = '连接失败，请将手表靠近手机后重试';
       deviceMachine.transition(DeviceConnectionState.error);
     }
     notifyListeners();
   }
 
+  Future<void> _syncInitialDeviceData(String deviceId) async {
+    final isCurrent = await _syncDeviceData(deviceId, initial: true);
+    if (!isCurrent) return;
+    unawaited(refreshSportRecords());
+    unawaited(synchronizeCloud());
+  }
+
+  Future<void> syncDeviceData() async {
+    final device = connectedDevice;
+    if (device == null) {
+      errorMessage = '请先连接手表';
+      notifyListeners();
+      return;
+    }
+    if (isDeviceSyncing) return;
+    final succeeded = await _syncDeviceData(device.id, initial: false);
+    if (succeeded) {
+      unawaited(synchronizeCloud());
+    }
+  }
+
+  Future<bool> _syncDeviceData(String deviceId, {required bool initial}) async {
+    if (connectedDevice?.id != deviceId || isDeviceSyncing) return false;
+    final generation = ++_deviceSyncGeneration;
+    isDeviceSyncing = true;
+    var succeeded = false;
+    deviceSyncProgress = 0;
+    syncStatus = '正在读取手表数据';
+    _clearDeviceSyncError();
+    notifyListeners();
+    try {
+      final records = await _wearable.syncHealthData();
+      if (!_isDeviceSyncCurrent(generation, deviceId)) return false;
+      await _healthStore.upsert(records);
+      if (!_isDeviceSyncCurrent(generation, deviceId)) return false;
+      healthRecords = await _healthStore.recent();
+      if (!_isDeviceSyncCurrent(generation, deviceId)) return false;
+      syncStatus = records.isEmpty ? '设备暂无新数据' : '已同步 ${records.length} 条';
+      succeeded = true;
+    } on PlatformException catch (error) {
+      if (!_isDeviceSyncCurrent(generation, deviceId)) return false;
+      syncStatus = '设备已连接，${initial ? '首次数据同步失败' : '历史数据同步失败'}';
+      _deviceSyncErrorMessage =
+          '设备已连接，但${_wearableErrorMessage(error, fallback: initial ? '首次数据同步失败' : '历史数据同步失败')}';
+      errorMessage = _deviceSyncErrorMessage;
+    } catch (_) {
+      if (!_isDeviceSyncCurrent(generation, deviceId)) return false;
+      syncStatus = '设备已连接，${initial ? '首次数据同步失败' : '历史数据同步失败'}';
+      _deviceSyncErrorMessage = '设备已连接，但数据读取失败，请稍后重试';
+      errorMessage = _deviceSyncErrorMessage;
+    } finally {
+      if (_deviceSyncGeneration == generation) {
+        isDeviceSyncing = false;
+        deviceSyncProgress = 0;
+        if (!_disposed) notifyListeners();
+      }
+    }
+    return succeeded && _isDeviceSyncCurrent(generation, deviceId);
+  }
+
+  bool _isDeviceSyncCurrent(int generation, String deviceId) =>
+      !_disposed &&
+      _deviceSyncGeneration == generation &&
+      connectedDevice?.id == deviceId;
+
+  void _invalidateDeviceSync() {
+    _deviceSyncGeneration++;
+    isDeviceSyncing = false;
+    deviceSyncProgress = 0;
+    _clearDeviceSyncError();
+  }
+
+  void _clearDeviceSyncError() {
+    if (errorMessage == _deviceSyncErrorMessage) {
+      errorMessage = null;
+    }
+    _deviceSyncErrorMessage = null;
+  }
+
   Future<void> disconnectDevice() async {
+    _invalidateDeviceSync();
     try {
       await _wearable.disconnect();
     } finally {
       connectedDevice = null;
+      _latestDeviceDetails = null;
       capabilities = null;
+      deviceFeatureData = const {};
+      deviceFeatureBusy = const {};
       if (deviceState != DeviceConnectionState.disconnected) {
         if (deviceState == DeviceConnectionState.error) {
           deviceMachine.transition(DeviceConnectionState.disconnected);
@@ -276,9 +467,22 @@ class AppController extends ChangeNotifier {
     try {
       deviceMachine.transition(DeviceConnectionState.measuring);
       await _wearable.startMeasurement(metric);
-    } on WearableSdkNotConfigured catch (error) {
-      errorMessage = error.message;
+    } on WearableSdkNotConfigured catch (_) {
+      errorMessage = '此功能暂时无法使用，请稍后再试';
       deviceMachine.transition(DeviceConnectionState.error);
+    } on PlatformException catch (error) {
+      errorMessage = _wearableErrorMessage(
+        error,
+        fallback: '${metric.label}测量失败',
+      );
+      if (deviceState == DeviceConnectionState.measuring) {
+        deviceMachine.transition(DeviceConnectionState.ready);
+      }
+    } catch (_) {
+      errorMessage = '${metric.label}测量失败，请稍后重试';
+      if (deviceState == DeviceConnectionState.measuring) {
+        deviceMachine.transition(DeviceConnectionState.ready);
+      }
     }
     notifyListeners();
   }
@@ -295,6 +499,258 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setUnits({String? distance, String? temperature}) {
+    if (distance != null) distanceUnit = distance;
+    if (temperature != null) temperatureUnit = temperature;
+    notifyListeners();
+  }
+
+  Future<bool> startSport(SportMode mode) async {
+    if (connectedDevice == null) {
+      errorMessage = '请先连接手表后再开始运动';
+      notifyListeners();
+      return false;
+    }
+    errorMessage = null;
+    try {
+      await _wearable.startSport(mode);
+      activeSport = mode;
+      if (deviceState == DeviceConnectionState.ready) {
+        deviceMachine.transition(DeviceConnectionState.measuring);
+      }
+      notifyListeners();
+      return true;
+    } on PlatformException catch (error) {
+      errorMessage = _wearableErrorMessage(error, fallback: '无法开始运动');
+    } on WearableSdkNotConfigured catch (_) {
+      errorMessage = '此功能暂时无法使用，请稍后再试';
+    } catch (_) {
+      errorMessage = '无法开始运动，请稍后重试';
+    }
+    notifyListeners();
+    return false;
+  }
+
+  Future<void> stopSport() async {
+    if (activeSport == null) return;
+    try {
+      await _wearable.stopSport();
+      activeSport = null;
+      if (deviceState == DeviceConnectionState.measuring) {
+        deviceMachine.transition(DeviceConnectionState.ready);
+      }
+      await refreshSportRecords();
+    } on PlatformException catch (error) {
+      errorMessage = _wearableErrorMessage(error, fallback: '结束运动失败');
+    } catch (_) {
+      errorMessage = '结束运动失败，请稍后重试';
+    }
+    notifyListeners();
+  }
+
+  Future<void> refreshSportRecords() async {
+    await Future<void>.delayed(Duration.zero);
+    if (connectedDevice == null) {
+      sportRecords = const [];
+      notifyListeners();
+      return;
+    }
+    try {
+      sportRecords = await _wearable.readSportRecords();
+    } on PlatformException catch (error) {
+      errorMessage = _wearableErrorMessage(error, fallback: '读取运动记录失败');
+    } catch (_) {
+      errorMessage = '运动记录读取失败，请稍后重试';
+    }
+    notifyListeners();
+  }
+
+  Future<void> refreshDeviceSettings() async {
+    await Future<void>.delayed(Duration.zero);
+    if (connectedDevice == null) {
+      autoMeasureSettings = const {};
+      heartRateWarningSupported = false;
+      deviceSettingsStatus = '请先连接手表';
+      notifyListeners();
+      return;
+    }
+    deviceSettingsStatus = '正在读取手表设置';
+    heartRateWarningSupported = false;
+    notifyListeners();
+    try {
+      final settings = await _wearable.readAutoMeasureSettings();
+      autoMeasureSettings = settings;
+      final warning = await _wearable.readHeartRateWarning();
+      heartRateWarningSupported = warning != null;
+      if (warning != null && warning > 0) {
+        final bounded = warning.clamp(70, 185).toInt();
+        heartRateWarning = (bounded ~/ 5) * 5;
+      }
+      deviceSettingsStatus = settings.isEmpty && !heartRateWarningSupported
+          ? '当前手表未提供可设置的健康检测项目'
+          : '设置已同步';
+    } on PlatformException catch (error) {
+      deviceSettingsStatus = _wearableErrorMessage(error, fallback: '读取手表设置失败');
+    } catch (_) {
+      deviceSettingsStatus = '手表设置读取失败，请稍后重试';
+    }
+    notifyListeners();
+  }
+
+  Future<void> setAutoMeasureSetting(String type, bool enabled) async {
+    if (connectedDevice == null) {
+      errorMessage = '请先连接手表';
+      notifyListeners();
+      return;
+    }
+    try {
+      await _wearable.setAutoMeasureSetting(type, enabled);
+      autoMeasureSettings = {...autoMeasureSettings, type: enabled};
+      deviceSettingsStatus = '设置已写入手表';
+    } on PlatformException catch (error) {
+      errorMessage = _wearableErrorMessage(error, fallback: '写入手表设置失败');
+    }
+    notifyListeners();
+  }
+
+  Future<void> setHeartRateWarning(int value) async {
+    if (connectedDevice == null) {
+      errorMessage = '请先连接手表';
+      notifyListeners();
+      return;
+    }
+    try {
+      await _wearable.setHeartRateWarning(value);
+      heartRateWarning = value;
+      deviceSettingsStatus = '心率预警已写入手表';
+    } on PlatformException catch (error) {
+      errorMessage = _wearableErrorMessage(error, fallback: '心率预警设置失败');
+    }
+    notifyListeners();
+  }
+
+  FeatureAvailability availabilityFor(DeviceFeature feature) {
+    if (connectedDevice == null) {
+      return const FeatureAvailability(FeatureAvailabilityStatus.needsDevice);
+    }
+    final currentCapabilities = capabilities;
+    if (currentCapabilities == null) {
+      return const FeatureAvailability(
+        FeatureAvailabilityStatus.serviceUnavailable,
+      );
+    }
+    if (!currentCapabilities.supportsFeature(feature)) {
+      return const FeatureAvailability(
+        FeatureAvailabilityStatus.unsupportedDevice,
+      );
+    }
+    if (!currentCapabilities.integratedFeatures.contains(feature)) {
+      return const FeatureAvailability(
+        FeatureAvailabilityStatus.serviceUnavailable,
+      );
+    }
+    return const FeatureAvailability(FeatureAvailabilityStatus.ready);
+  }
+
+  Future<Map<String, Object?>> readDeviceFeature(DeviceFeature feature) async {
+    final availability = availabilityFor(feature);
+    if (!availability.isReady) {
+      errorMessage = availability.message;
+      notifyListeners();
+      return const {};
+    }
+    _setDeviceFeatureBusy(feature, true);
+    try {
+      final value = await _wearable.readDeviceFeature(feature);
+      deviceFeatureData = {...deviceFeatureData, feature: value};
+      return value;
+    } on PlatformException catch (error) {
+      errorMessage = _wearableErrorMessage(
+        error,
+        fallback: '${feature.label}暂时无法读取',
+      );
+      return const {};
+    } catch (_) {
+      errorMessage = '${feature.label}暂时无法读取，请稍后重试';
+      return const {};
+    } finally {
+      _setDeviceFeatureBusy(feature, false);
+    }
+  }
+
+  Future<bool> writeDeviceFeature(
+    DeviceFeature feature,
+    Map<String, Object?> values,
+  ) async {
+    final availability = availabilityFor(feature);
+    if (!availability.isReady) {
+      errorMessage = availability.message;
+      notifyListeners();
+      return false;
+    }
+    _setDeviceFeatureBusy(feature, true);
+    try {
+      await _wearable.writeDeviceFeature(feature, values);
+      deviceFeatureData = {
+        ...deviceFeatureData,
+        feature: {...?deviceFeatureData[feature], ...values},
+      };
+      errorMessage = null;
+      return true;
+    } on PlatformException catch (error) {
+      errorMessage = _wearableErrorMessage(
+        error,
+        fallback: '${feature.label}保存失败',
+      );
+      return false;
+    } catch (_) {
+      errorMessage = '${feature.label}保存失败，请稍后重试';
+      return false;
+    } finally {
+      _setDeviceFeatureBusy(feature, false);
+    }
+  }
+
+  Future<bool> triggerDeviceAction(
+    DeviceFeature feature, {
+    bool enabled = true,
+  }) async {
+    final availability = availabilityFor(feature);
+    if (!availability.isReady) {
+      errorMessage = availability.message;
+      notifyListeners();
+      return false;
+    }
+    _setDeviceFeatureBusy(feature, true);
+    try {
+      await _wearable.triggerDeviceAction(feature, enabled: enabled);
+      errorMessage = null;
+      return true;
+    } on PlatformException catch (error) {
+      errorMessage = _wearableErrorMessage(
+        error,
+        fallback: '${feature.label}暂时无法使用',
+      );
+      return false;
+    } catch (_) {
+      errorMessage = '${feature.label}暂时无法使用，请稍后重试';
+      return false;
+    } finally {
+      _setDeviceFeatureBusy(feature, false);
+    }
+  }
+
+  void _setDeviceFeatureBusy(DeviceFeature feature, bool busy) {
+    final next = {...deviceFeatureBusy};
+    if (busy) {
+      next.add(feature);
+    } else {
+      next.remove(feature);
+    }
+    deviceFeatureBusy = next;
+    notifyListeners();
+  }
+
   Future<void> synchronizeCloud() async {
     if (_syncing) return;
     if (session == null) {
@@ -308,7 +764,7 @@ class AppController extends ChangeNotifier {
       syncStatus =
           result.message ?? '已上传 ${result.uploaded} 条，拒绝 ${result.rejected} 条';
     } on ApiException catch (error) {
-      syncStatus = '云端同步失败：${error.message}';
+      syncStatus = _apiErrorMessage(error, fallback: '数据同步失败，请稍后重试');
     } finally {
       _syncing = false;
       notifyListeners();
@@ -323,7 +779,7 @@ class AppController extends ChangeNotifier {
     try {
       careMembers = await _api.getCareMembers();
     } on ApiException catch (error) {
-      errorMessage = '关爱数据：${error.message}';
+      errorMessage = _apiErrorMessage(error, fallback: '关爱数据暂时无法读取');
     }
     notifyListeners();
   }
@@ -333,9 +789,421 @@ class AppController extends ChangeNotifier {
     careMembers = await _api.getCareMembers();
   });
 
+  Future<void> refreshMemberProfile() async {
+    if (session == null) {
+      memberProfile = const {};
+      notifyListeners();
+      return;
+    }
+    try {
+      memberProfile = await _api.getMemberProfile();
+    } on ApiException catch (error) {
+      errorMessage = _apiErrorMessage(error, fallback: '个人资料暂时无法读取');
+    }
+    notifyListeners();
+  }
+
+  Future<bool> saveMemberProfile({
+    required String nickname,
+    required int gender,
+    required String birthday,
+    required double height,
+    required double weight,
+  }) => _guard(() async {
+    if (session == null) throw const ApiException('请先登录后编辑个人资料');
+    await _api.saveMemberProfile(
+      nickname: nickname,
+      gender: gender,
+      birthday: birthday,
+      height: height,
+      weight: weight,
+      headPortrait: memberProfile['head_portrait']?.toString(),
+    );
+    await refreshMemberProfile();
+  });
+
+  Future<void> refreshActivityGoals() async {
+    if (session == null) return;
+    try {
+      final goals = await _api.getActivityGoals();
+      stepGoal = num.tryParse('${goals['steps'] ?? ''}')?.toInt() ?? stepGoal;
+      distanceGoal =
+          num.tryParse('${goals['juli'] ?? ''}')?.toDouble() ?? distanceGoal;
+      calorieGoal =
+          num.tryParse('${goals['reliang'] ?? ''}')?.toInt() ?? calorieGoal;
+    } on ApiException catch (error) {
+      errorMessage = _apiErrorMessage(error, fallback: '目标暂时无法读取');
+    }
+    notifyListeners();
+  }
+
+  Future<bool> saveActivityGoals({
+    required int steps,
+    required double distance,
+    required int calories,
+  }) => _guard(() async {
+    if (session == null) throw const ApiException('请先登录后保存目标');
+    await _api.saveActivityGoals(
+      steps: steps,
+      distance: distance,
+      calories: calories,
+    );
+    stepGoal = steps;
+    distanceGoal = distance;
+    calorieGoal = calories;
+  });
+
+  Future<void> refreshAiArticles() async {
+    aiStatus = '正在加载';
+    notifyListeners();
+    try {
+      aiArticles = await _api.getArticles();
+      aiStatus = aiArticles.isEmpty ? '暂无百科内容' : '已加载';
+    } on ApiException catch (error) {
+      aiStatus = _apiErrorMessage(error, fallback: '百科暂时无法加载');
+    }
+    notifyListeners();
+  }
+
+  Future<Map<String, Object?>> loadArticle(int id) async {
+    try {
+      return await _api.getArticle(id);
+    } on ApiException catch (error) {
+      errorMessage = _apiErrorMessage(error, fallback: '文章暂时无法加载');
+      notifyListeners();
+      return const {};
+    }
+  }
+
+  Future<Map<String, Object?>> loadSingleArticle(int id) async {
+    try {
+      return await _api.getSingleArticle(id);
+    } on ApiException catch (error) {
+      errorMessage = _apiErrorMessage(error, fallback: '内容暂时无法加载');
+      notifyListeners();
+      return const {};
+    }
+  }
+
+  Future<void> refreshNotifications() async {
+    await Future<void>.delayed(Duration.zero);
+    if (session == null) {
+      notifications = const [];
+      notificationStatus = '请先登录';
+      notifyListeners();
+      return;
+    }
+    notificationStatus = '正在加载';
+    notifyListeners();
+    try {
+      notifications = await _api.getNotifications();
+      notificationStatus = notifications.isEmpty ? '暂无消息' : '已加载';
+    } on ApiException catch (error) {
+      notificationStatus = _apiErrorMessage(error, fallback: '消息暂时无法加载');
+    }
+    notifyListeners();
+  }
+
+  Future<Map<String, Object?>> loadNotification(int id) async {
+    try {
+      return await _api.getNotification(id);
+    } on ApiException catch (error) {
+      errorMessage = _apiErrorMessage(error, fallback: '消息暂时无法加载');
+      notifyListeners();
+      return const {};
+    }
+  }
+
+  Future<Map<String, Object?>> loadCareMemberPreview(int id) async {
+    try {
+      return await _api.getCareMemberPreview(
+        id: id,
+        day: DateTime.now().toIso8601String().substring(0, 10),
+      );
+    } on ApiException catch (error) {
+      errorMessage = _apiErrorMessage(error, fallback: '对方数据暂时无法读取');
+      notifyListeners();
+      return const {};
+    }
+  }
+
+  Future<void> refreshAiMessages({required int app}) async {
+    await Future<void>.delayed(Duration.zero);
+    if (session == null) {
+      aiMessages = const [];
+      errorMessage = '请先登录后使用 AI 管家';
+      notifyListeners();
+      return;
+    }
+    try {
+      final messages = await _api.getAiMessages(app: app);
+      if (messages.isNotEmpty) {
+        final sessionId = '${messages.first['session_id'] ?? ''}';
+        if (sessionId.isNotEmpty) _aiSessionIds[app] = sessionId;
+      } else {
+        _aiSessionIds.remove(app);
+      }
+      aiMessages = messages.reversed.toList();
+    } on ApiException catch (error) {
+      errorMessage = _apiErrorMessage(error, fallback: '暂时无法开始对话');
+    }
+    notifyListeners();
+  }
+
+  Future<bool> sendAiMessage({
+    required int app,
+    required String message,
+  }) async {
+    final normalized = message.trim();
+    if (normalized.isEmpty) return false;
+    if (session == null) {
+      errorMessage = '请先登录后使用 AI 管家';
+      notifyListeners();
+      return false;
+    }
+    aiMessages = [
+      ...aiMessages,
+      <String, Object?>{'message': normalized, 'my': 1},
+    ];
+    isBusy = true;
+    notifyListeners();
+    try {
+      final reply = await _api.sendAiMessage(
+        app: app,
+        message: normalized,
+        sessionId: _aiSessionIds[app],
+      );
+      aiMessages = [...aiMessages, reply];
+      final sessionValue = reply['session_id']?.toString();
+      if (sessionValue?.isNotEmpty ?? false) _aiSessionIds[app] = sessionValue!;
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = _apiErrorMessage(error, fallback: '消息发送失败，请稍后重试');
+      aiMessages = [
+        ...aiMessages.take(aiMessages.length - 1),
+        <String, Object?>{...aiMessages.last, 'send_failed': true},
+      ];
+      return false;
+    } finally {
+      isBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> loadOrders(int? status) async {
+    await Future<void>.delayed(Duration.zero);
+    if (session == null) {
+      orders = const [];
+      orderStatus = '请先登录';
+      notifyListeners();
+      return;
+    }
+    orderStatus = '正在加载';
+    notifyListeners();
+    try {
+      orders = await _api.getOrders(status: status);
+      orderStatus = orders.isEmpty ? '暂无订单' : '已加载';
+    } on ApiException catch (error) {
+      orderStatus = _apiErrorMessage(error, fallback: '订单暂时无法加载');
+    }
+    notifyListeners();
+  }
+
+  Future<Map<String, Object?>> loadOrderDetail(int id) async {
+    try {
+      return await _api.getOrderDetail(id);
+    } on ApiException catch (error) {
+      errorMessage = _apiErrorMessage(error, fallback: '订单详情暂时无法加载');
+      notifyListeners();
+      return const {};
+    }
+  }
+
+  Future<void> loadAddresses() async {
+    await Future<void>.delayed(Duration.zero);
+    if (session == null) {
+      addresses = const [];
+      errorMessage = '请先登录后查看收货地址';
+      notifyListeners();
+      return;
+    }
+    try {
+      addresses = await _api.getAddresses();
+    } on ApiException catch (error) {
+      errorMessage = _apiErrorMessage(error, fallback: '收货地址暂时无法加载');
+    }
+    notifyListeners();
+  }
+
+  SaydianShopApi get _requiredShopApi {
+    final api = _api;
+    if (api is SaydianShopApi) return api as SaydianShopApi;
+    throw const FeatureNotConfiguredException('商城接口未配置');
+  }
+
+  Future<Map<String, Object?>> loadShopHome() =>
+      _shopMapRequest('商城首页', () => _requiredShopApi.getShopHome());
+
+  Future<Map<String, Object?>> loadShopProduct(int id) =>
+      _shopMapRequest('商品详情', () => _requiredShopApi.getShopProduct(id));
+
+  Future<Map<String, Object?>> previewShopOrder({
+    required int skuId,
+    required int quantity,
+  }) => _shopMapRequest(
+    '确认订单',
+    () => _requiredShopApi.previewShopOrder(skuId: skuId, quantity: quantity),
+  );
+
+  Future<Map<String, Object?>> createShopOrder({
+    required int skuId,
+    required int quantity,
+    required int addressId,
+    required String buyerMessage,
+    required num point,
+  }) async {
+    if (session == null) {
+      errorMessage = '请先登录后提交订单';
+      notifyListeners();
+      return const {};
+    }
+    isBusy = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      final order = await _requiredShopApi.createShopOrder(
+        skuId: skuId,
+        quantity: quantity,
+        addressId: addressId,
+        buyerMessage: buyerMessage,
+        point: point,
+      );
+      unawaited(loadOrders(null));
+      return order;
+    } on ApiException catch (error) {
+      errorMessage = _apiErrorMessage(error, fallback: '订单提交失败，请稍后重试');
+      return const {};
+    } finally {
+      isBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<Map<String, Object?>> loadShopAddress(int id) =>
+      _shopMapRequest('收货地址', () => _requiredShopApi.getAddress(id));
+
+  Future<bool> saveShopAddress({
+    int? id,
+    required String realname,
+    required String mobile,
+    required String addressDetails,
+    required bool isDefault,
+    required String region,
+    required int provinceId,
+    required int cityId,
+    required int areaId,
+  }) async {
+    if (session == null) {
+      errorMessage = '请先登录后保存收货地址';
+      notifyListeners();
+      return false;
+    }
+    isBusy = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      await _requiredShopApi.saveAddress(
+        id: id,
+        realname: realname,
+        mobile: mobile,
+        addressDetails: addressDetails,
+        isDefault: isDefault,
+        region: region,
+        provinceId: provinceId,
+        cityId: cityId,
+        areaId: areaId,
+      );
+      await loadAddresses();
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = _apiErrorMessage(error, fallback: '收货地址保存失败');
+      return false;
+    } finally {
+      isBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<List<Map<String, Object?>>> loadOrderExpress(int orderId) async {
+    try {
+      return await _requiredShopApi.getOrderExpress(orderId);
+    } on ApiException catch (error) {
+      errorMessage = _apiErrorMessage(error, fallback: '物流信息暂时无法加载');
+      notifyListeners();
+      return const [];
+    }
+  }
+
+  Future<Map<String, Object?>> _shopMapRequest(
+    String label,
+    Future<Map<String, Object?>> Function() request,
+  ) async {
+    await Future<void>.delayed(Duration.zero);
+    try {
+      return await request();
+    } on ApiException catch (error) {
+      errorMessage = _apiErrorMessage(error, fallback: '$label暂时无法加载');
+      notifyListeners();
+      return const {};
+    }
+  }
+
   void clearError() {
     errorMessage = null;
     notifyListeners();
+  }
+
+  String _apiErrorMessage(ApiException error, {required String fallback}) {
+    if (error is FeatureNotConfiguredException) {
+      return '此功能暂时无法使用，请稍后再试';
+    }
+    final message = error.message.trim();
+    final normalized = message.toLowerCase();
+    if (normalized.contains('network') ||
+        normalized.contains('socket') ||
+        normalized.contains('timeout') ||
+        message.contains('网络')) {
+      return '网络不可用，请检查后重试';
+    }
+    if (message.contains('接口未配置') ||
+        normalized.contains('token') ||
+        normalized.contains('http') ||
+        normalized.contains('api')) {
+      return fallback;
+    }
+    return message.isEmpty ? fallback : message;
+  }
+
+  String _wearableErrorMessage(
+    PlatformException error, {
+    required String fallback,
+  }) {
+    return switch (error.code) {
+      'BLUETOOTH_DISABLED' => '请先打开手机蓝牙',
+      'BLE_PERMISSION_DENIED' || 'LOCATION_SERVICE_DISABLED' => '允许相关权限后使用',
+      'DEVICE_NOT_FOUND' => '手表已离开搜索范围，请重新搜索',
+      'NOT_CONNECTED' => '连接手表后使用',
+      'UNSUPPORTED_METRIC' ||
+      'MEASUREMENT_NOT_AVAILABLE' ||
+      'FEATURE_UNSUPPORTED' => '当前手表不支持此功能',
+      'SDK_NOT_CONFIGURED' ||
+      'FEATURE_UNAVAILABLE' ||
+      'DEVICE_SETTINGS_NOT_CONFIGURED' ||
+      'SPORT_NOT_CONFIGURED' => '此功能暂时无法使用，请稍后再试',
+      'CONNECT_FAILED' || 'CONNECTION_DROPPED' => '连接失败，请确认手表未连接其他手机后重试',
+      'NETWORK_ERROR' || 'NETWORK_UNAVAILABLE' => '网络不可用，请检查后重试',
+      _ => fallback,
+    };
   }
 
   Future<bool> _guard(Future<void> Function() operation) async {
@@ -346,7 +1214,7 @@ class AppController extends ChangeNotifier {
       await operation();
       return true;
     } on ApiException catch (error) {
-      errorMessage = error.message;
+      errorMessage = _apiErrorMessage(error, fallback: '操作失败，请稍后重试');
       return false;
     } catch (_) {
       errorMessage = '操作失败，请稍后重试';
@@ -358,15 +1226,51 @@ class AppController extends ChangeNotifier {
   }
 
   void _handleWearableEvent(WearableEvent event) {
-    if (event.type == 'healthRecord') {
+    if (_disposed) return;
+    if (event.type == 'scanDevice') {
+      final device = DeviceInfo.fromMap(event.payload);
+      _upsertScannedDevice(device);
+    } else if (event.type == 'deviceDetails') {
+      _latestDeviceDetails = DeviceInfo.fromMap(event.payload);
+      final current = connectedDevice;
+      if (current != null && current.id == _latestDeviceDetails?.id) {
+        connectedDevice = _mergeDeviceDetails(current);
+      }
+    } else if (event.type == 'syncProgress') {
+      final deviceId = '${event.payload['deviceId'] ?? ''}';
+      if (isDeviceSyncing && connectedDevice?.id == deviceId) {
+        deviceSyncProgress =
+            ((event.payload['progress'] as num?)?.toDouble() ?? 0)
+                .clamp(0.0, 1.0)
+                .toDouble();
+        syncStatus = '正在读取手表数据 ${(deviceSyncProgress * 100).round()}%';
+      }
+    } else if (event.type == 'healthRecord') {
       try {
         final record = HealthRecord.fromJson(event.payload);
         unawaited(_saveWearableRecord(record));
       } catch (_) {
         errorMessage = '收到无法识别的设备数据';
       }
+    } else if (event.type == 'cameraShutter') {
+      cameraShutterSequence += 1;
+    } else if (event.type == 'deviceFeatureProgress') {
+      final feature = DeviceFeature.tryFromWire(
+        '${event.payload['feature'] ?? ''}',
+      );
+      if (feature != null) {
+        deviceFeatureData = {
+          ...deviceFeatureData,
+          feature: {
+            ...?deviceFeatureData[feature],
+            'progress': (event.payload['progress'] as num?)?.toInt() ?? 0,
+          },
+        };
+      }
     } else if (event.type == 'disconnected') {
+      _invalidateDeviceSync();
       connectedDevice = null;
+      _latestDeviceDetails = null;
       if (deviceState != DeviceConnectionState.disconnected) {
         try {
           deviceMachine.transition(DeviceConnectionState.disconnected);
@@ -375,9 +1279,53 @@ class AppController extends ChangeNotifier {
         }
       }
     } else if (event.type == 'error') {
-      errorMessage = '${event.payload['message'] ?? '设备通信异常'}';
+      errorMessage = _wearableErrorMessage(
+        PlatformException(
+          code: '${event.payload['code'] ?? 'WEARABLE_ERROR'}',
+          message: event.payload['message']?.toString(),
+        ),
+        fallback: '手表连接出现问题，请稍后重试',
+      );
+    } else if (event.type == 'sportState' &&
+        event.payload['value'] == 'stopped') {
+      activeSport = null;
+      if (deviceState == DeviceConnectionState.measuring) {
+        deviceMachine.transition(DeviceConnectionState.ready);
+      }
+      unawaited(refreshSportRecords());
     }
     notifyListeners();
+  }
+
+  void _upsertScannedDevice(DeviceInfo device) {
+    if (device.id.trim().isEmpty) return;
+    final byId = <String, DeviceInfo>{
+      for (final existing in scannedDevices) existing.id: existing,
+      device.id: device,
+    };
+    scannedDevices = byId.values.toList()
+      ..sort(
+        (left, right) => (right.rssi ?? -999).compareTo(left.rssi ?? -999),
+      );
+  }
+
+  DeviceInfo _mergeDeviceDetails(DeviceInfo device) {
+    final details = _latestDeviceDetails;
+    if (details == null || details.id != device.id) return device;
+    final firmware = details.firmwareVersion?.trim();
+    return DeviceInfo(
+      id: device.id,
+      name: details.name.trim().isEmpty ? device.name : details.name,
+      model: (details.model?.trim().isNotEmpty ?? false)
+          ? details.model
+          : device.model,
+      serialNumber: details.serialNumber ?? device.serialNumber,
+      firmwareVersion: (firmware?.isNotEmpty ?? false)
+          ? firmware
+          : device.firmwareVersion,
+      rssi: device.rssi ?? details.rssi,
+      lastSyncAt: device.lastSyncAt ?? details.lastSyncAt,
+    );
   }
 
   Future<void> _saveWearableRecord(HealthRecord record) async {
@@ -392,6 +1340,8 @@ class AppController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    _invalidateDeviceSync();
     unawaited(_wearableEvents?.cancel());
     unawaited(_deviceStates?.cancel());
     unawaited(_connectivity?.cancel());

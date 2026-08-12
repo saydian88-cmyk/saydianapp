@@ -1,5 +1,9 @@
 # 赛电 App 开发交接说明
 
+> 本文件是 2026-08-05 的历史基线。包含商城、AI、设备扫描修复和最新 30 项测试结果的
+> 当前交接说明请阅读 [`HANDOFF-20260812.md`](HANDOFF-20260812.md)。不要用旧 Git bundle
+> 覆盖当前工作树。
+
 交接日期：2026-08-05
 
 项目目录：`F:\xcodeplace\国内电商\赛电app`
@@ -61,9 +65,10 @@ git log --oneline
   `F:\xcodeplace\国内电商\赛电app\Saidian小程序源码.zip`
 - API/原型资料（本机参考文件，不进入 Git）：`相关信息.txt`、`veepooSDK接入文档.pdf`
 
-蓝湖项目包含 127 个画板。本次没有照搬商城、AI 管家、表盘、OTA 等后续范围，已经按
-核心内测范围落地登录、首页、健康、设备、关爱和我的。UI 主色为黑白，健康状态使用绿色，
-页面采用浅色渐变、圆角卡片和胶囊按钮。
+蓝湖项目包含 127 个画板。当前已按原型和小程序补齐首页、健康、AI、设备、我的五栏导航，
+并落地运动入口/记录、AI 健康与运动管家、健康百科、订单、目标、个人资料、地址和权限管理。
+商城完整交易、表盘、OTA 等仍为后续范围。UI 主色为黑白，健康状态使用绿色，页面采用
+浅色渐变、圆角卡片和胶囊按钮。
 
 ## 4. 工程结构
 
@@ -82,7 +87,7 @@ lib/
     wearable_bridge.dart           Flutter Method/Event Channel 契约
   ui/
     app_theme.dart                 蓝湖风格主题、色板和渐变
-    pages.dart                     六个核心页面与通用组件
+    pages.dart                     五栏页面、业务子页面与通用组件
 
 android/app/src/main/kotlin/.../MainActivity.kt
                                     Veepoo Android 直接适配
@@ -98,7 +103,7 @@ test/                               状态机、API、同步、登录和 UI 布�
 锁定版本：
 
 - Android 官方提交：`773759d71d0c9d8003d7267c0e319d3167862410`
-- Android 核心：`vpprotocol-2.3.74.15.aar`、`vpbluetooth-1.20.aar`
+- Android 核心：`vpprotocol-2.3.77.15.aar`、`vpbluetooth-1.20.aar`
 - iOS 官方提交：`2e25bde67031d7d89e3c6d8d9f9dc76204d9fabe`
 - iOS SDK：`2.2.96.15`
 - 小程序 SDK 提交：`f24c35d020e989d6fa147dbbd6f2d81bbf6ded20`
@@ -244,7 +249,8 @@ open Runner.xcworkspace
 
 ### P2：后续功能
 
-核心链路稳定后再排 AI 管家、商城完整交易、表盘、OTA、联系人、相机遥控和消息通知。
+核心链路稳定后再排商城完整交易、表盘、OTA、联系人、相机遥控和消息通知；AI 管家已接入
+小程序现有接口，仍需用正式账号完成内容安全、限流和长对话验收。
 
 ## 10. Git 历史与接手规则
 

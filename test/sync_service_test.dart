@@ -98,6 +98,73 @@ abstract class _BaseFakeApi implements SaydianApi {
   Future<List<Map<String, Object?>>> getCareMembers() async => const [];
 
   @override
+  Future<Map<String, Object?>> getCareMemberPreview({
+    required int id,
+    required String day,
+  }) async => const {};
+
+  @override
+  Future<Map<String, Object?>> getMemberProfile() async => const {};
+
+  @override
+  Future<void> saveMemberProfile({
+    required String nickname,
+    required int gender,
+    required String birthday,
+    required double height,
+    required double weight,
+    String? headPortrait,
+  }) async {}
+
+  @override
+  Future<Map<String, Object?>> getActivityGoals() async => const {};
+
+  @override
+  Future<void> saveActivityGoals({
+    required int steps,
+    required double distance,
+    required int calories,
+  }) async {}
+
+  @override
+  Future<List<Map<String, Object?>>> getArticles() async => const [];
+
+  @override
+  Future<Map<String, Object?>> getArticle(int id) async => const {};
+
+  @override
+  Future<Map<String, Object?>> getSingleArticle(int id) async => const {};
+
+  @override
+  Future<List<Map<String, Object?>>> getNotifications({int page = 1}) async =>
+      const [];
+
+  @override
+  Future<Map<String, Object?>> getNotification(int id) async => const {};
+
+  @override
+  Future<List<Map<String, Object?>>> getAiMessages({
+    required int app,
+    int page = 1,
+  }) async => const [];
+
+  @override
+  Future<Map<String, Object?>> sendAiMessage({
+    required int app,
+    required String message,
+    String? sessionId,
+  }) async => const {};
+
+  @override
+  Future<List<Map<String, Object?>>> getOrders({int? status}) async => const [];
+
+  @override
+  Future<Map<String, Object?>> getOrderDetail(int id) async => const {};
+
+  @override
+  Future<List<Map<String, Object?>>> getAddresses() async => const [];
+
+  @override
   Future<Session> login(String username, String password) =>
       throw UnimplementedError();
 

@@ -6,7 +6,7 @@ plugins {
 
 val veepooSdkArtifacts =
     listOf(
-        "vpprotocol-2.3.74.15.aar",
+        "vpprotocol-2.3.77.15.aar",
         "vpbluetooth-1.20.aar",
         "JL_Watch_V1.13.1_11214-release.aar",
         "jl_rcsp_V0.7.2_527-release.aar",
@@ -51,6 +51,10 @@ android {
             // Internal builds intentionally use the debug key until the Android
             // store signing material is configured outside the repository.
             signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }

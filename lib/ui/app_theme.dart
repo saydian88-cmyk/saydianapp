@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 abstract final class SaydianColors {
   static const ink = Color(0xFF101114);
   static const muted = Color(0xFF747981);
-  static const canvas = Color(0xFFF4F5F7);
+  static const canvas = Color(0xFFF5F6F8);
   static const line = Color(0xFFE9EBEF);
   static const green = Color(0xFF48D66B);
   static const blue = Color(0xFF5C9DFF);
@@ -44,7 +44,7 @@ ThemeData buildSaydianTheme() {
       elevation: 0,
       margin: EdgeInsets.zero,
       color: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
@@ -52,22 +52,22 @@ ThemeData buildSaydianTheme() {
       hintStyle: const TextStyle(color: Color(0xFFB4B8BF), fontSize: 14),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 17),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(9),
         borderSide: BorderSide.none,
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(9),
         borderSide: const BorderSide(color: SaydianColors.line),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(9),
         borderSide: const BorderSide(color: SaydianColors.ink, width: 1.2),
       ),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
         minimumSize: const Size(0, 50),
-        shape: const StadiumBorder(),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         textStyle: const TextStyle(fontWeight: FontWeight.w700),
       ),
     ),
@@ -76,7 +76,7 @@ ThemeData buildSaydianTheme() {
         minimumSize: const Size(0, 50),
         foregroundColor: SaydianColors.ink,
         side: const BorderSide(color: SaydianColors.line),
-        shape: const StadiumBorder(),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         textStyle: const TextStyle(fontWeight: FontWeight.w600),
       ),
     ),
@@ -86,12 +86,12 @@ ThemeData buildSaydianTheme() {
       space: 1,
     ),
     navigationBarTheme: NavigationBarThemeData(
-      height: 70,
+      height: 66,
       backgroundColor: Colors.white,
       elevation: 0,
       indicatorColor: SaydianColors.ink,
       indicatorShape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
       ),
       labelTextStyle: WidgetStateProperty.resolveWith(
         (states) => TextStyle(
@@ -117,7 +117,8 @@ ThemeData buildSaydianTheme() {
 }
 
 const saydianSoftGradient = LinearGradient(
-  colors: [Color(0xFFEAF9FF), Color(0xFFF8F4E9), Color(0xFFF2F9F4)],
+  colors: [Color(0xFFF2FEFF), Color(0xFFFAF7EE), SaydianColors.canvas],
+  stops: [0, 0.42, 1],
   begin: Alignment.topLeft,
   end: Alignment.bottomRight,
 );

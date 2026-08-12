@@ -50,4 +50,32 @@ void main() {
       isFalse,
     );
   });
+
+  test('SportRecord maps the native Veepoo payload', () {
+    final record = SportRecord.fromMap(const {
+      'id': 'sport-1',
+      'mode': 'cycling',
+      'startedAt': '2026-08-07 08:30:00',
+      'durationSeconds': 1800,
+      'distanceKm': 12.5,
+      'calories': 320.0,
+    });
+
+    expect(record.mode, SportMode.cycling);
+    expect(record.durationSeconds, 1800);
+    expect(record.distanceKm, 12.5);
+    expect(record.startedAt, DateTime(2026, 8, 7, 8, 30));
+  });
+
+  test('WearableEvent unwraps the native event-channel payload', () {
+    final event = WearableEvent.fromMap(const {
+      'type': 'scanDevice',
+      'payload': {'id': 'WATCH:01', 'name': 'Saidian Watch', 'rssi': -42},
+    });
+
+    expect(event.type, 'scanDevice');
+    expect(event.payload['id'], 'WATCH:01');
+    expect(event.payload['name'], 'Saidian Watch');
+    expect(event.payload.containsKey('payload'), isFalse);
+  });
 }

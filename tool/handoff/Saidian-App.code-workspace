@@ -1,0 +1,12 @@
+{
+  "folders": [
+    {
+      "name": "Saidian App",
+      "path": "../.."
+    }
+  ],
+  "settings": {
+    "dart.flutterSdkPath": "D:/Dev/Flutter/3.44.9",
+    "dart.lineLength": 100
+  }
+}

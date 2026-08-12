@@ -36,13 +36,78 @@ abstract interface class SaydianApi {
   Future<Session> login(String username, String password);
   Future<Session> register(String mobile, String password);
   Future<List<Map<String, Object?>>> getCareMembers();
+  Future<Map<String, Object?>> getCareMemberPreview({
+    required int id,
+    required String day,
+  });
   Future<Map<String, Object?>> addCare(String mobile);
+  Future<Map<String, Object?>> getMemberProfile();
+  Future<void> saveMemberProfile({
+    required String nickname,
+    required int gender,
+    required String birthday,
+    required double height,
+    required double weight,
+    String? headPortrait,
+  });
+  Future<Map<String, Object?>> getActivityGoals();
+  Future<void> saveActivityGoals({
+    required int steps,
+    required double distance,
+    required int calories,
+  });
+  Future<List<Map<String, Object?>>> getArticles();
+  Future<Map<String, Object?>> getArticle(int id);
+  Future<Map<String, Object?>> getSingleArticle(int id);
+  Future<List<Map<String, Object?>>> getNotifications({int page = 1});
+  Future<Map<String, Object?>> getNotification(int id);
+  Future<List<Map<String, Object?>>> getAiMessages({
+    required int app,
+    int page = 1,
+  });
+  Future<Map<String, Object?>> sendAiMessage({
+    required int app,
+    required String message,
+    String? sessionId,
+  });
+  Future<List<Map<String, Object?>>> getOrders({int? status});
+  Future<Map<String, Object?>> getOrderDetail(int id);
+  Future<List<Map<String, Object?>>> getAddresses();
   Future<BatchUploadResult> uploadHealthBatch(SyncBatch batch);
   Future<void> logout();
   Future<void> deleteAccount();
 }
 
-class SaydianApiClient implements SaydianApi {
+abstract interface class SaydianShopApi {
+  Future<Map<String, Object?>> getShopHome();
+  Future<Map<String, Object?>> getShopProduct(int id);
+  Future<Map<String, Object?>> previewShopOrder({
+    required int skuId,
+    required int quantity,
+  });
+  Future<Map<String, Object?>> createShopOrder({
+    required int skuId,
+    required int quantity,
+    required int addressId,
+    String buyerMessage = '',
+    num point = 0,
+  });
+  Future<Map<String, Object?>> getAddress(int id);
+  Future<Map<String, Object?>> saveAddress({
+    int? id,
+    required String realname,
+    required String mobile,
+    required String addressDetails,
+    required bool isDefault,
+    required String region,
+    required int provinceId,
+    required int cityId,
+    required int areaId,
+  });
+  Future<List<Map<String, Object?>>> getOrderExpress(int orderId);
+}
+
+class SaydianApiClient implements SaydianApi, SaydianShopApi {
   SaydianApiClient(this._vault, {http.Client? client, Uri? baseUri})
     : _client = client ?? http.Client(),
       _baseUri =
@@ -76,7 +141,9 @@ class SaydianApiClient implements SaydianApi {
   Future<Session> _authenticate(String path, Map<String, String> fields) async {
     final request = http.MultipartRequest('POST', _uri(path))
       ..fields.addAll(fields);
-    final response = await http.Response.fromStream(await _client.send(request));
+    final response = await http.Response.fromStream(
+      await _client.send(request),
+    );
     final payload = _decode(response);
     final data = _data(payload);
     final member = data['member'];
@@ -99,7 +166,7 @@ class SaydianApiClient implements SaydianApi {
 
   @override
   Future<List<Map<String, Object?>>> getCareMembers() async {
-    final response = await _authorizedGet('/api/v1/member/care');
+    final response = await _authorizedGet('/api/v1/member/care/my');
     final payload = _decode(response);
     final data = payload['data'];
     final rawList = data is List
@@ -123,6 +190,244 @@ class SaydianApiClient implements SaydianApi {
       'mobile': normalized,
     });
     return _data(_decode(response));
+  }
+
+  @override
+  Future<Map<String, Object?>> getMemberProfile() async {
+    final response = await _authorizedGet('/api/v1/member/member/my');
+    return _data(_decode(response));
+  }
+
+  @override
+  Future<void> saveMemberProfile({
+    required String nickname,
+    required int gender,
+    required String birthday,
+    required double height,
+    required double weight,
+    String? headPortrait,
+  }) async {
+    final response = await _authorizedPostFields('/api/v1/member/member/save', {
+      'nickname': nickname.trim(),
+      'gender': '$gender',
+      'birthday': birthday,
+      'height': '$height',
+      'weight': '$weight',
+      if (headPortrait?.isNotEmpty ?? false) 'head_portrait': headPortrait!,
+    });
+    _decode(response);
+  }
+
+  @override
+  Future<Map<String, Object?>> getActivityGoals() async {
+    final response = await _authorizedGet(
+      '/api/v1/member/member-mubiao/preview',
+    );
+    return _data(_decode(response));
+  }
+
+  @override
+  Future<void> saveActivityGoals({
+    required int steps,
+    required double distance,
+    required int calories,
+  }) async {
+    final response = await _authorizedPostFields(
+      '/api/v1/member/member-mubiao',
+      {'steps': '$steps', 'juli': '$distance', 'reliang': '$calories'},
+    );
+    _decode(response);
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> getArticles() async {
+    final response = await _client.get(_uri('/api/rf-article/article/index'));
+    return _list(_decode(response));
+  }
+
+  @override
+  Future<Map<String, Object?>> getArticle(int id) async {
+    final response = await _client.get(
+      _uri('/api/rf-article/article/view', {'id': '$id'}),
+    );
+    return _data(_decode(response));
+  }
+
+  @override
+  Future<Map<String, Object?>> getSingleArticle(int id) async {
+    final response = await _client.get(
+      _uri('/api/rf-article/article-single/view', {'id': '$id'}),
+    );
+    return _data(_decode(response));
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> getNotifications({int page = 1}) async {
+    final response = await _authorizedGet('/api/v1/member/notify', {
+      'page': '$page',
+    });
+    return _list(_decode(response));
+  }
+
+  @override
+  Future<Map<String, Object?>> getNotification(int id) async {
+    final response = await _authorizedGet('/api/v1/member/notify/$id');
+    return _data(_decode(response));
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> getAiMessages({
+    required int app,
+    int page = 1,
+  }) async {
+    final response = await _authorizedGet('/api/rf-article/chat/index', {
+      'app': '$app',
+      'page': '$page',
+    });
+    return _list(_decode(response));
+  }
+
+  @override
+  Future<Map<String, Object?>> sendAiMessage({
+    required int app,
+    required String message,
+    String? sessionId,
+  }) async {
+    final response =
+        await _authorizedPostFields('/api/rf-article/chat/create', {
+          'app': '$app',
+          'message': message.trim(),
+          if (sessionId?.isNotEmpty ?? false) 'session_id': sessionId!,
+        });
+    return _data(_decode(response));
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> getOrders({int? status}) async {
+    final response = await _authorizedGet(
+      '/api/inv-shop/v1/member/order/index',
+      {'page': '1', if (status != null) 'synthesize_status': '$status'},
+    );
+    return _list(_decode(response));
+  }
+
+  @override
+  Future<Map<String, Object?>> getOrderDetail(int id) async {
+    final response = await _authorizedGet(
+      '/api/inv-shop/v1/member/order/view',
+      {'id': '$id'},
+    );
+    return _data(_decode(response));
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> getAddresses() async {
+    final response = await _authorizedGet('/api/v1/member/address', const {
+      'page': '1',
+    });
+    return _list(_decode(response));
+  }
+
+  @override
+  Future<Map<String, Object?>> getShopHome() async {
+    final response = await _client.get(
+      _uri('/api/v1/pages', const {'code': 'SHOP_HOME'}),
+    );
+    return _data(_decode(response));
+  }
+
+  @override
+  Future<Map<String, Object?>> getShopProduct(int id) async {
+    final response = await _client.get(
+      _uri('/api/inv-shop/v1/product/product/view', {'id': '$id'}),
+    );
+    return _data(_decode(response));
+  }
+
+  @override
+  Future<Map<String, Object?>> previewShopOrder({
+    required int skuId,
+    required int quantity,
+  }) async {
+    final data = jsonEncode({'sku_id': skuId, 'num': quantity});
+    final response = await _authorizedGet(
+      '/api/inv-shop/v1/order/order/preview',
+      {'type': 'buy_now', 'data': data, 'is_channel': '0'},
+    );
+    return _data(_decode(response));
+  }
+
+  @override
+  Future<Map<String, Object?>> createShopOrder({
+    required int skuId,
+    required int quantity,
+    required int addressId,
+    String buyerMessage = '',
+    num point = 0,
+  }) async {
+    final response = await _authorizedPostJson(
+      '/api/inv-shop/v1/order/order/create',
+      {
+        'merchant_id': 0,
+        'is_channel': 0,
+        'address_id': addressId,
+        'buyer_message': buyerMessage.trim(),
+        'data': jsonEncode({'sku_id': skuId, 'num': quantity}),
+        'shipping_type': 1,
+        'type': 'buy_now',
+        'point': point,
+      },
+    );
+    return _data(_decode(response));
+  }
+
+  @override
+  Future<Map<String, Object?>> getAddress(int id) async {
+    final response = await _authorizedGet('/api/v1/member/address/$id');
+    return _data(_decode(response));
+  }
+
+  @override
+  Future<Map<String, Object?>> saveAddress({
+    int? id,
+    required String realname,
+    required String mobile,
+    required String addressDetails,
+    required bool isDefault,
+    required String region,
+    required int provinceId,
+    required int cityId,
+    required int areaId,
+  }) async {
+    final body = <String, Object?>{
+      'realname': realname.trim(),
+      'mobile': mobile.trim(),
+      'address_details': addressDetails.trim(),
+      'is_default': isDefault ? 1 : 0,
+      'region': region,
+      'province_id': provinceId,
+      'city_id': cityId,
+      'area_id': areaId,
+    };
+    final response = id == null
+        ? await _authorizedPostJson('/api/v1/member/address', body)
+        : await _authorizedPutJson('/api/v1/member/address/$id', body);
+    return _data(_decode(response));
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> getOrderExpress(int orderId) async {
+    final response = await _authorizedGet(
+      '/api/inv-shop/v1/member/order-product-express/details',
+      {'order_id': '$orderId'},
+    );
+    final data = _data(_decode(response));
+    final rawList = data['data'];
+    if (rawList is! List) return const [];
+    return rawList
+        .whereType<Map>()
+        .map((value) => value.map((key, value) => MapEntry('$key', value)))
+        .toList();
   }
 
   @override
@@ -194,10 +499,13 @@ class SaydianApiClient implements SaydianApi {
     await _vault.clearSession();
   }
 
-  Future<http.Response> _authorizedGet(String path) async {
+  Future<http.Response> _authorizedGet(
+    String path, [
+    Map<String, String>? query,
+  ]) async {
     final session = await _requiredSession();
     return _client.get(
-      _uri(path),
+      _uri(path, query),
       headers: {'Authorization': 'Bearer ${session.accessToken}'},
     );
   }
@@ -228,6 +536,21 @@ class SaydianApiClient implements SaydianApi {
       ..headers['Authorization'] = 'Bearer ${session.accessToken}'
       ..fields.addAll(fields);
     return http.Response.fromStream(await _client.send(request));
+  }
+
+  Future<http.Response> _authorizedPutJson(
+    String path,
+    Map<String, Object?> body,
+  ) async {
+    final session = await _requiredSession();
+    return _client.put(
+      _uri(path),
+      headers: {
+        'Authorization': 'Bearer ${session.accessToken}',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode(body),
+    );
   }
 
   Future<Session> _requiredSession() async {
@@ -267,5 +590,30 @@ class SaydianApiClient implements SaydianApi {
     final data = payload['data'];
     if (data is! Map) return <String, Object?>{};
     return data.map((key, value) => MapEntry('$key', value));
+  }
+
+  List<Map<String, Object?>> _list(Map<String, Object?> payload) {
+    final data = payload['data'];
+    final values = data is List
+        ? data
+        : data is Map && data['list'] is List
+        ? data['list'] as List
+        : const [];
+    return values
+        .whereType<Map>()
+        .map((value) => value.map((key, value) => MapEntry('$key', value)))
+        .toList();
+  }
+
+  @override
+  Future<Map<String, Object?>> getCareMemberPreview({
+    required int id,
+    required String day,
+  }) async {
+    final response = await _authorizedGet('/api/v1/member/care/preview', {
+      'id': '$id',
+      'day': day,
+    });
+    return _data(_decode(response));
   }
 }
