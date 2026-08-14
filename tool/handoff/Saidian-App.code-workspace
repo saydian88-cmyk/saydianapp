@@ -6,7 +6,7 @@
     }
   ],
   "settings": {
-    "dart.flutterSdkPath": "D:/Dev/Flutter/3.44.9",
+    "dart.flutterSdkPath": "E:/saydian/.toolchains/flutter",
     "dart.lineLength": 100
   }
 }
