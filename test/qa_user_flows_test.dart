@@ -169,6 +169,72 @@ void main() {
     }
   });
 
+  testWidgets(
+    'cloud upload failure does not overwrite a successful device sync status',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      try {
+        final api = _QaApi(
+          uploadError: const FeatureNotConfiguredException('批量健康同步接口未配置'),
+        );
+        final wearable = _QaWearable(
+          syncRecords: [
+            HealthRecord(
+              id: 'record-1',
+              metric: HealthMetric.heartRate,
+              values: const {'value': 72},
+              unit: 'bpm',
+              measuredAt: DateTime.utc(2026, 8, 13),
+              timezone: '+08:00',
+              deviceId: 'QA:WATCH:01',
+              firmwareVersion: 'QA-FW-1',
+              quality: 'good',
+              source: MeasurementSource.wearable,
+              rawVersion: 1,
+            ),
+          ],
+        );
+        final controller = _controller(api: api, wearable: wearable);
+        await controller.initialize();
+        controller
+          ..session = _session
+          ..memberProfile = const {
+            'nickname': 'QA 用户',
+            'birthday': '1990-01-01',
+            'height': 170,
+            'weight': 60,
+            'gender': 1,
+          };
+        addTearDown(controller.dispose);
+        await _pumpPhone(tester, controller);
+
+        await tester.tap(find.text('设备'));
+        await tester.pump();
+        await tester.tap(find.widgetWithText(FilledButton, '开始查找'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pump();
+        await tester.tap(find.text('连接'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('首页'));
+        await tester.pumpAndSettle();
+
+        expect(controller.syncStatus, '已同步 1 条');
+        expect(controller.cloudSyncStatus, '批量健康同步接口未配置');
+        await tester.scrollUntilVisible(
+          find.text('数据同步'),
+          300,
+          scrollable: find.byType(Scrollable).first,
+        );
+        await tester.pump();
+        expect(find.text('QA-1 · 已同步 1 条'), findsOneWidget);
+        expect(find.text('批量健康同步接口未配置'), findsOneWidget);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    },
+  );
+
   testWidgets('device connection error remains visible beside scan results', (
     tester,
   ) async {
@@ -203,6 +269,71 @@ void main() {
       expect(find.text('QA Watch'), findsOneWidget);
       expect(find.text('连接失败，请确认手表未连接其他手机后重试'), findsOneWidget);
       expect(tester.takeException(), isNull);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  test(
+    'transient disconnect during a successful connection keeps the device ready',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      try {
+        final wearable = _QaWearable(transientDisconnectDuringConnect: true);
+        final controller = _controller(wearable: wearable);
+        await controller.initialize();
+        addTearDown(controller.dispose);
+
+        final scan = controller.scanDevices();
+        await Future<void>.delayed(Duration.zero);
+        await controller.connectDevice(wearable.scannedDevice);
+        await scan;
+        await Future<void>.delayed(Duration.zero);
+
+        expect(controller.deviceState, DeviceConnectionState.ready);
+        expect(controller.connectedDevice?.id, 'QA:WATCH:01');
+        expect(controller.errorMessage, isNull);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    },
+  );
+
+  test('automatic reconnect restores the ready device state', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    try {
+      final wearable = _QaWearable();
+      final controller = _controller(wearable: wearable);
+      await controller.initialize();
+      addTearDown(controller.dispose);
+
+      final scan = controller.scanDevices();
+      await Future<void>.delayed(Duration.zero);
+      await controller.connectDevice(wearable.scannedDevice);
+      await scan;
+      wearable.emitEvent(
+        const WearableEvent(type: 'disconnected', payload: {}),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.deviceState, DeviceConnectionState.disconnected);
+
+      wearable.emitEvent(
+        const WearableEvent(
+          type: 'reconnected',
+          payload: {
+            'id': 'QA:WATCH:01',
+            'name': 'QA Watch',
+            'model': 'QA-1',
+            'firmwareVersion': 'QA-FW-2',
+          },
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.deviceState, DeviceConnectionState.ready);
+      expect(controller.connectedDevice?.firmwareVersion, 'QA-FW-2');
+      expect(controller.errorMessage, isNull);
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }
@@ -350,6 +481,26 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('closing add care dialog does not use a disposed controller', (
+    tester,
+  ) async {
+    final controller = _authenticatedController();
+    addTearDown(controller.dispose);
+    await _pumpPhone(tester, controller);
+
+    await tester.tap(find.text('远程关爱'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('添加关爱'));
+    await tester.tap(find.text('添加关爱'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AlertDialog, '添加关爱'), findsOneWidget);
+
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+  });
 }
 
 AppController _controller({_QaApi? api, _QaWearable? wearable}) =>
@@ -390,6 +541,9 @@ final _session = Session(
 );
 
 class _QaApi extends Fake implements SaydianApi, SaydianShopApi {
+  _QaApi({this.uploadError});
+
+  final ApiException? uploadError;
   (String, String)? lastLogin;
   (String, String)? lastRegistration;
   String? lastAiMessage;
@@ -597,12 +751,14 @@ class _QaApi extends Fake implements SaydianApi, SaydianShopApi {
   }) async {}
 
   @override
-  Future<BatchUploadResult> uploadHealthBatch(SyncBatch batch) async =>
-      BatchUploadResult(
-        acceptedIds: batch.records.map((record) => record.id).toSet(),
-        rejected: const {},
-        nextCursor: null,
-      );
+  Future<BatchUploadResult> uploadHealthBatch(SyncBatch batch) async {
+    if (uploadError case final error?) throw error;
+    return BatchUploadResult(
+      acceptedIds: batch.records.map((record) => record.id).toSet(),
+      rejected: const {},
+      nextCursor: null,
+    );
+  }
 
   @override
   Future<void> logout() async {}
@@ -612,12 +768,19 @@ class _QaApi extends Fake implements SaydianApi, SaydianShopApi {
 }
 
 class _QaWearable extends Fake implements WearableBridge {
-  _QaWearable({this.connectError, this.syncError, DeviceInfo? scannedDevice})
-    : scannedDevice = scannedDevice ?? _watch;
+  _QaWearable({
+    this.connectError,
+    this.syncError,
+    this.syncRecords = const [],
+    this.transientDisconnectDuringConnect = false,
+    DeviceInfo? scannedDevice,
+  }) : scannedDevice = scannedDevice ?? _watch;
 
   final _events = StreamController<WearableEvent>.broadcast();
   final String? connectError;
   PlatformException? syncError;
+  final List<HealthRecord> syncRecords;
+  final bool transientDisconnectDuringConnect;
   final DeviceInfo scannedDevice;
   int scanCount = 0;
   int stopScanCount = 0;
@@ -635,6 +798,8 @@ class _QaWearable extends Fake implements WearableBridge {
 
   @override
   Stream<WearableEvent> get events => _events.stream;
+
+  void emitEvent(WearableEvent event) => _events.add(event);
 
   @override
   Future<List<DeviceInfo>> scanDevices() async {
@@ -664,6 +829,10 @@ class _QaWearable extends Fake implements WearableBridge {
     if (connectError case final message?) {
       throw PlatformException(code: 'CONNECT_FAILED', message: message);
     }
+    if (transientDisconnectDuringConnect) {
+      _events.add(const WearableEvent(type: 'disconnected', payload: {}));
+      await Future<void>.delayed(Duration.zero);
+    }
     connectedDeviceId = deviceId;
     scheduleMicrotask(
       () => _events.add(
@@ -690,7 +859,7 @@ class _QaWearable extends Fake implements WearableBridge {
   Future<List<HealthRecord>> syncHealthData({String? cursor}) async {
     syncCount++;
     if (syncError case final error?) throw error;
-    return const [];
+    return syncRecords;
   }
 
   @override

@@ -11,6 +11,14 @@ abstract interface class HealthStore {
   Future<void> initialize();
   Future<void> upsert(List<HealthRecord> records);
   Future<List<HealthRecord>> recent({int limit = 200});
+  Future<List<HealthRecord>> range({
+    required HealthMetric metric,
+    required DateTime start,
+    required DateTime end,
+  });
+  Future<List<HealthRecord>> latestForEachMetric();
+  Future<void> saveSportRecord(SportRecord record);
+  Future<List<SportRecord>> localSportRecords();
   Future<List<HealthRecord>> pending({int limit = 200});
   Future<void> markSynced(Iterable<String> ids);
   Future<String?> readCursor();
@@ -41,7 +49,7 @@ class EncryptedHealthStore implements HealthStore {
     _database = await openDatabase(
       file,
       password: password,
-      version: 1,
+      version: 2,
       onConfigure: (database) async {
         await database.execute('PRAGMA foreign_keys = ON');
       },
@@ -60,11 +68,45 @@ class EncryptedHealthStore implements HealthStore {
           ON health_records(measured_at DESC)
         ''');
         await database.execute('''
+          CREATE INDEX health_records_metric_time
+          ON health_records(metric, measured_at DESC)
+        ''');
+        await database.execute('''
           CREATE TABLE metadata (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
           )
         ''');
+        await database.execute('''
+          CREATE TABLE sport_records (
+            id TEXT PRIMARY KEY,
+            started_at TEXT NOT NULL,
+            payload TEXT NOT NULL
+          )
+        ''');
+        await database.execute('''
+          CREATE INDEX sport_records_time
+          ON sport_records(started_at DESC)
+        ''');
+      },
+      onUpgrade: (database, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await database.execute('''
+            CREATE INDEX IF NOT EXISTS health_records_metric_time
+            ON health_records(metric, measured_at DESC)
+          ''');
+          await database.execute('''
+            CREATE TABLE IF NOT EXISTS sport_records (
+              id TEXT PRIMARY KEY,
+              started_at TEXT NOT NULL,
+              payload TEXT NOT NULL
+            )
+          ''');
+          await database.execute('''
+            CREATE INDEX IF NOT EXISTS sport_records_time
+            ON sport_records(started_at DESC)
+          ''');
+        }
       },
     );
   }
@@ -94,6 +136,65 @@ class EncryptedHealthStore implements HealthStore {
       limit: limit,
     );
     return _decodeRows(rows);
+  }
+
+  @override
+  Future<List<HealthRecord>> range({
+    required HealthMetric metric,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final rows = await _db.query(
+      'health_records',
+      columns: ['payload'],
+      where: 'metric = ? AND measured_at >= ? AND measured_at < ?',
+      whereArgs: [
+        metric.wireName,
+        start.toUtc().toIso8601String(),
+        end.toUtc().toIso8601String(),
+      ],
+      orderBy: 'measured_at ASC',
+    );
+    return _decodeRows(rows);
+  }
+
+  @override
+  Future<List<HealthRecord>> latestForEachMetric() async {
+    final rows = await _db.rawQuery('''
+      SELECT payload
+      FROM health_records AS current
+      WHERE measured_at = (
+        SELECT MAX(candidate.measured_at)
+        FROM health_records AS candidate
+        WHERE candidate.metric = current.metric
+      )
+      ORDER BY measured_at DESC
+    ''');
+    return _decodeRows(rows);
+  }
+
+  @override
+  Future<void> saveSportRecord(SportRecord record) =>
+      _db.insert('sport_records', {
+        'id': record.id,
+        'started_at': (record.startedAt ?? DateTime.now())
+            .toUtc()
+            .toIso8601String(),
+        'payload': jsonEncode(record.toMap()),
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+  @override
+  Future<List<SportRecord>> localSportRecords() async {
+    final rows = await _db.query(
+      'sport_records',
+      columns: ['payload'],
+      orderBy: 'started_at DESC',
+    );
+    return rows
+        .map((row) => jsonDecode('${row['payload']}'))
+        .whereType<Map>()
+        .map(SportRecord.fromMap)
+        .toList();
   }
 
   @override
@@ -160,6 +261,7 @@ class MemoryHealthStore implements HealthStore {
   final Map<String, HealthRecord> _records = {};
   final Set<String> _synced = {};
   String? _cursor;
+  final Map<String, SportRecord> _sportRecords = {};
 
   @override
   Future<void> initialize() async {}
@@ -176,6 +278,55 @@ class MemoryHealthStore implements HealthStore {
     final values = _records.values.toList()
       ..sort((a, b) => b.measuredAt.compareTo(a.measuredAt));
     return values.take(limit).toList();
+  }
+
+  @override
+  Future<List<HealthRecord>> range({
+    required HealthMetric metric,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final values =
+        _records.values
+            .where(
+              (record) =>
+                  record.metric == metric &&
+                  !record.measuredAt.isBefore(start) &&
+                  record.measuredAt.isBefore(end),
+            )
+            .toList()
+          ..sort((a, b) => a.measuredAt.compareTo(b.measuredAt));
+    return values;
+  }
+
+  @override
+  Future<List<HealthRecord>> latestForEachMetric() async {
+    final latest = <HealthMetric, HealthRecord>{};
+    for (final record in _records.values) {
+      final current = latest[record.metric];
+      if (current == null || record.measuredAt.isAfter(current.measuredAt)) {
+        latest[record.metric] = record;
+      }
+    }
+    final values = latest.values.toList()
+      ..sort((a, b) => b.measuredAt.compareTo(a.measuredAt));
+    return values;
+  }
+
+  @override
+  Future<void> saveSportRecord(SportRecord record) async {
+    _sportRecords[record.id] = record;
+  }
+
+  @override
+  Future<List<SportRecord>> localSportRecords() async {
+    final values = _sportRecords.values.toList()
+      ..sort(
+        (a, b) => (b.startedAt ?? DateTime(1970)).compareTo(
+          a.startedAt ?? DateTime(1970),
+        ),
+      );
+    return values;
   }
 
   @override

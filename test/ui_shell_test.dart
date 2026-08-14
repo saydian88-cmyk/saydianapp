@@ -10,6 +10,7 @@ import 'package:saydian_app/services/local_health_store.dart';
 import 'package:saydian_app/services/secure_vault.dart';
 import 'package:saydian_app/services/wearable_bridge.dart';
 import 'package:saydian_app/ui/app_theme.dart';
+import 'package:saydian_app/ui/health_trend_page.dart';
 import 'package:saydian_app/ui/pages.dart';
 
 void main() {
@@ -124,6 +125,45 @@ void main() {
     }
   });
 
+  testWidgets('P40 Pro viewport and enlarged text remain overflow-free', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(362, 797));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final controller = AppController(
+      MemorySessionVault(),
+      _NoopApi(),
+      MemoryHealthStore(),
+      _NoopWearable(),
+    )..enterPreview();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSaydianTheme(),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(1.5)),
+          child: child!,
+        ),
+        home: ListenableBuilder(
+          listenable: controller,
+          builder: (context, _) => AppShell(controller: controller),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('dashboard-today-health')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('health-metric-heartRate')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   test(
     'unsupported health settings finish with a clear device state',
     () async {
@@ -142,6 +182,73 @@ void main() {
       expect(controller.deviceSettingsStatus, '当前手表未提供可设置的健康检测项目');
     },
   );
+
+  testWidgets('health trend supports period switching and record details', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(375, 812));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final now = DateTime.now();
+    final store = MemoryHealthStore();
+    await store.initialize();
+    await store.upsert([
+      for (var index = 0; index < 3; index++)
+        HealthRecord(
+          id: 'heart-$index',
+          metric: HealthMetric.heartRate,
+          values: {'value': 68 + index * 4},
+          unit: 'bpm',
+          measuredAt: DateTime(now.year, now.month, now.day, 8 + index * 3),
+          timezone: '+08:00',
+          deviceId: 'ET488',
+          firmwareVersion: 'test',
+          quality: 'good',
+          source: MeasurementSource.wearable,
+          rawVersion: 1,
+        ),
+    ]);
+    final controller = AppController(
+      MemorySessionVault(),
+      _NoopApi(),
+      store,
+      _NoopWearable(),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSaydianTheme(),
+        home: HealthTrendPage(
+          controller: controller,
+          metric: HealthMetric.heartRate,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('心率分析'), findsOneWidget);
+    expect(find.text('平均值'), findsOneWidget);
+    expect(find.text('3 条'), findsWidgets);
+
+    await tester.tap(find.text('周'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.text('月'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byIcon(Icons.calendar_month_outlined));
+    await tester.pumpAndSettle();
+    expect(find.text('选择查看日期'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
+    final recordValue = find.text('72 bpm').last;
+    await tester.ensureVisible(recordValue);
+    await tester.tap(recordValue);
+    await tester.pumpAndSettle();
+    expect(find.text('心率详情'), findsOneWidget);
+  });
 }
 
 class _NoopApi implements SaydianApi {

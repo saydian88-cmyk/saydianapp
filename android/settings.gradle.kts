@@ -27,3 +27,8 @@ plugins {
 }
 
 include(":app")
+
+val yuchengPlugin = project(":yc_product_plugin")
+val yuchengPluginSource = yuchengPlugin.projectDir.parentFile
+gradle.extra["yuchengPluginSource"] = yuchengPluginSource.absolutePath
+yuchengPlugin.projectDir = file("yc_product_plugin_android")

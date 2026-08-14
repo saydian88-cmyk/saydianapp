@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -107,7 +108,21 @@ abstract interface class SaydianShopApi {
   Future<List<Map<String, Object?>>> getOrderExpress(int orderId);
 }
 
-class SaydianApiClient implements SaydianApi, SaydianShopApi {
+abstract interface class SaydianCareApi {
+  Future<List<Map<String, Object?>>> getCareInvitations();
+  Future<void> respondCareInvitation({required int id, required bool accepted});
+  Future<Set<String>> getCareShareSettings({
+    required int type,
+    required int memberId,
+  });
+  Future<void> saveCareShareSettings({
+    required int type,
+    required int memberId,
+    required Set<String> settings,
+  });
+}
+
+class SaydianApiClient implements SaydianApi, SaydianShopApi, SaydianCareApi {
   SaydianApiClient(this._vault, {http.Client? client, Uri? baseUri})
     : _client = client ?? http.Client(),
       _baseUri =
@@ -122,6 +137,8 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi {
   final SessionVault _vault;
   final http.Client _client;
   final Uri _baseUri;
+
+  static const _requestTimeout = Duration(seconds: 20);
 
   Uri _uri(String path, [Map<String, String>? query]) =>
       _baseUri.resolve(path).replace(queryParameters: query);
@@ -141,9 +158,7 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi {
   Future<Session> _authenticate(String path, Map<String, String> fields) async {
     final request = http.MultipartRequest('POST', _uri(path))
       ..fields.addAll(fields);
-    final response = await http.Response.fromStream(
-      await _client.send(request),
-    );
+    final response = await _sendMultipart(request);
     final payload = _decode(response);
     final data = _data(payload);
     final member = data['member'];
@@ -167,7 +182,21 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi {
   @override
   Future<List<Map<String, Object?>>> getCareMembers() async {
     final response = await _authorizedGet('/api/v1/member/care/my');
-    final payload = _decode(response);
+    Map<String, Object?> payload;
+    try {
+      payload = _decode(response);
+    } on ApiException catch (error) {
+      // The current backend can return a missing-route business code inside
+      // an HTTP 200 response. Treat both transport and business 404/405 as
+      // the documented optional-endpoint state so the local queue is kept.
+      if (error.statusCode == 404 || error.statusCode == 405) {
+        throw FeatureNotConfiguredException(
+          '远程关爱接口暂未配置',
+          statusCode: error.statusCode,
+        );
+      }
+      rethrow;
+    }
     final data = payload['data'];
     final rawList = data is List
         ? data
@@ -241,22 +270,26 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi {
 
   @override
   Future<List<Map<String, Object?>>> getArticles() async {
-    final response = await _client.get(_uri('/api/rf-article/article/index'));
+    final response = await _performRequest(
+      () => _client.get(_uri('/api/rf-article/article/index')),
+    );
     return _list(_decode(response));
   }
 
   @override
   Future<Map<String, Object?>> getArticle(int id) async {
-    final response = await _client.get(
-      _uri('/api/rf-article/article/view', {'id': '$id'}),
+    final response = await _performRequest(
+      () => _client.get(_uri('/api/rf-article/article/view', {'id': '$id'})),
     );
     return _data(_decode(response));
   }
 
   @override
   Future<Map<String, Object?>> getSingleArticle(int id) async {
-    final response = await _client.get(
-      _uri('/api/rf-article/article-single/view', {'id': '$id'}),
+    final response = await _performRequest(
+      () => _client.get(
+        _uri('/api/rf-article/article-single/view', {'id': '$id'}),
+      ),
     );
     return _data(_decode(response));
   }
@@ -330,16 +363,18 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi {
 
   @override
   Future<Map<String, Object?>> getShopHome() async {
-    final response = await _client.get(
-      _uri('/api/v1/pages', const {'code': 'SHOP_HOME'}),
+    final response = await _performRequest(
+      () => _client.get(_uri('/api/v1/pages', const {'code': 'SHOP_HOME'})),
     );
     return _data(_decode(response));
   }
 
   @override
   Future<Map<String, Object?>> getShopProduct(int id) async {
-    final response = await _client.get(
-      _uri('/api/inv-shop/v1/product/product/view', {'id': '$id'}),
+    final response = await _performRequest(
+      () => _client.get(
+        _uri('/api/inv-shop/v1/product/product/view', {'id': '$id'}),
+      ),
     );
     return _data(_decode(response));
   }
@@ -446,7 +481,20 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi {
         statusCode: response.statusCode,
       );
     }
-    final payload = _decode(response);
+    Map<String, Object?> payload;
+    try {
+      payload = _decode(response);
+    } on ApiException catch (error) {
+      // The current backend can return a missing-route business code inside
+      // an HTTP 200 response. Normalize it to the documented optional API.
+      if (error.statusCode == 404 || error.statusCode == 405) {
+        throw FeatureNotConfiguredException(
+          '批量健康同步接口未配置',
+          statusCode: error.statusCode,
+        );
+      }
+      rethrow;
+    }
     final data = _data(payload);
     final accepted = data['accepted'];
     final rejected = data['rejected'];
@@ -504,9 +552,11 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi {
     Map<String, String>? query,
   ]) async {
     final session = await _requiredSession();
-    return _client.get(
-      _uri(path, query),
-      headers: {'Authorization': 'Bearer ${session.accessToken}'},
+    return _performRequest(
+      () => _client.get(
+        _uri(path, query),
+        headers: {'Authorization': 'Bearer ${session.accessToken}'},
+      ),
     );
   }
 
@@ -516,14 +566,16 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi {
     Map<String, String> headers = const {},
   }) async {
     final session = await _requiredSession();
-    return _client.post(
-      _uri(path),
-      headers: {
-        'Authorization': 'Bearer ${session.accessToken}',
-        'Content-Type': 'application/json',
-        ...headers,
-      },
-      body: jsonEncode(body),
+    return _performRequest(
+      () => _client.post(
+        _uri(path),
+        headers: {
+          'Authorization': 'Bearer ${session.accessToken}',
+          'Content-Type': 'application/json',
+          ...headers,
+        },
+        body: jsonEncode(body),
+      ),
     );
   }
 
@@ -535,7 +587,7 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi {
     final request = http.MultipartRequest('POST', _uri(path))
       ..headers['Authorization'] = 'Bearer ${session.accessToken}'
       ..fields.addAll(fields);
-    return http.Response.fromStream(await _client.send(request));
+    return _sendMultipart(request);
   }
 
   Future<http.Response> _authorizedPutJson(
@@ -543,14 +595,31 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi {
     Map<String, Object?> body,
   ) async {
     final session = await _requiredSession();
-    return _client.put(
-      _uri(path),
-      headers: {
-        'Authorization': 'Bearer ${session.accessToken}',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode(body),
+    return _performRequest(
+      () => _client.put(
+        _uri(path),
+        headers: {
+          'Authorization': 'Bearer ${session.accessToken}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(body),
+      ),
     );
+  }
+
+  Future<http.Response> _sendMultipart(http.MultipartRequest request) async {
+    final streamed = await _performRequest(() => _client.send(request));
+    return _performRequest(() => http.Response.fromStream(streamed));
+  }
+
+  Future<T> _performRequest<T>(Future<T> Function() request) async {
+    try {
+      return await request().timeout(_requestTimeout);
+    } on TimeoutException {
+      throw const ApiException('网络连接超时，请检查网络后重试', code: 'NETWORK_TIMEOUT');
+    } on http.ClientException {
+      throw const ApiException('网络连接失败，请检查网络后重试', code: 'NETWORK_UNAVAILABLE');
+    }
   }
 
   Future<Session> _requiredSession() async {
@@ -574,12 +643,15 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi {
     }
     final payload = decoded.map((key, value) => MapEntry('$key', value));
     final code = payload['code'];
+    final businessStatus = code is num && code >= 400 && code < 600
+        ? code.toInt()
+        : response.statusCode;
     if (response.statusCode < 200 ||
         response.statusCode >= 300 ||
         (code is num && code.toInt() != 200)) {
       throw ApiException(
         '${payload['message'] ?? '请求失败'}',
-        statusCode: response.statusCode,
+        statusCode: businessStatus,
         code: code,
       );
     }
@@ -615,5 +687,60 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi {
       'day': day,
     });
     return _data(_decode(response));
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> getCareInvitations() async {
+    final response = await _authorizedGet('/api/v1/member/care');
+    return _list(_decode(response));
+  }
+
+  @override
+  Future<void> respondCareInvitation({
+    required int id,
+    required bool accepted,
+  }) async {
+    final response = await _authorizedPostFields('/api/v1/member/care/save', {
+      'id': '$id',
+      'examine_status': accepted ? '1' : '2',
+    });
+    _decode(response);
+  }
+
+  @override
+  Future<Set<String>> getCareShareSettings({
+    required int type,
+    required int memberId,
+  }) async {
+    final response = await _authorizedGet(
+      '/api/v1/member/care-setting/preview',
+      {'type': '$type', 'to_member_id': '$memberId'},
+    );
+    final data = _data(_decode(response));
+    final raw = data['setting'];
+    Object? decoded = raw;
+    if (raw is String) {
+      try {
+        decoded = jsonDecode(raw);
+      } on FormatException {
+        decoded = const <Object?>[];
+      }
+    }
+    return decoded is List ? decoded.map((value) => '$value').toSet() : {};
+  }
+
+  @override
+  Future<void> saveCareShareSettings({
+    required int type,
+    required int memberId,
+    required Set<String> settings,
+  }) async {
+    final response =
+        await _authorizedPostFields('/api/v1/member/care-setting', {
+          'type': '$type',
+          'to_member_id': '$memberId',
+          'setting': jsonEncode(settings.toList()..sort()),
+        });
+    _decode(response);
   }
 }

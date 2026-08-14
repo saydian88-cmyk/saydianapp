@@ -2,6 +2,13 @@ allprojects {
     repositories {
         maven("https://maven.aliyun.com/repository/google")
         maven("https://maven.aliyun.com/repository/central")
+        maven("https://maven.aliyun.com/repository/public")
+        val yuchengPluginSource = gradle.extra.properties["yuchengPluginSource"] as? String
+        if (yuchengPluginSource != null) {
+            flatDir {
+                dirs(file("$yuchengPluginSource/android/libs"))
+            }
+        }
         google()
         mavenCentral()
     }

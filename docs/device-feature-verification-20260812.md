@@ -65,3 +65,10 @@
 - 最终包健康监测证据：`build/device-feature-qa-20260812/handoff-v14-health-fixed.png`、`handoff-v14-health-refresh.xml`。
 - 最终包连接与原表盘证据：`build/device-feature-qa-20260812/handoff-v14-final-device.png`、`handoff-v14-watch-final-current.png`、`handoff-v14-watch-final-current.xml`。
 - 尚未宣称完成：iPhone 真机、自动定位天气真机闭环和照片表盘传输。
+
+## 2026-08-13 iOS 与双 SDK 补充
+
+- 上述“iPhone 尚未验证”是 2026-08-12 当日状态；2026-08-13 已在 iPhone 15 Pro Max + ET488 完成扫描、连接、能力读取、健康同步及主要无损操作回归。
+- 生产双 SDK 路由下，ET488 扫描 ID 使用 `veepoo:` 前缀，连接达到 `ready`，一次同步 250 条；云端批量接口未配置时不再覆盖设备同步成功状态。
+- W8、W8S、W8 Pro、W8 Ultra、W8 Ultra-R 已接入云创 SDK 路由、自动测试和双平台构建，但本轮没有 W8 真机，因此不宣称 W8 真机通过。
+- iOS ET488 的普通 BLE 已通过；经典蓝牙 HFP 仍未建立，详见 `ios-migration-verification-20260813.md`。

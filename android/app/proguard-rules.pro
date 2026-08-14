@@ -16,3 +16,32 @@
 # implementations. Horizontal class merging caused $Proxy instances to be cast
 # to the merged concrete callback class in the previous release APK.
 -keep class cc.saidian.saydian_app.VeepooWearableAdapter** { *; }
+
+# The pinned Yucheng SDK ships optional AliAgent, Realtek OTA and chip-specific
+# branches without all of their proprietary runtimes. The app does not expose
+# those optional entry points. Keep R8 strict for every other missing class and
+# suppress only the exact vendor references reported by AGP.
+-dontwarn com.alibaba.fastjson.JSONObject
+-dontwarn com.alibaba.fastjson.TypeReference
+-dontwarn com.alibaba.fastjson.parser.Feature
+-dontwarn com.google.firebase.crashlytics.buildtools.reloc.org.apache.commons.codec.binary.Hex
+-dontwarn com.jieli.bt.decryption.HashDecryption
+-dontwarn com.realsil.sdk.core.logger.ZLogger
+-dontwarn com.realsil.sdk.dfu.image.BinFactory
+-dontwarn com.realsil.sdk.dfu.image.LoadParams$Builder
+-dontwarn com.realsil.sdk.dfu.image.LoadParams
+-dontwarn com.realsil.sdk.dfu.model.BinInfo
+-dontwarn com.realsil.sdk.dfu.model.DfuConfig
+-dontwarn com.realsil.sdk.dfu.model.OtaDeviceInfo
+-dontwarn com.realsil.sdk.dfu.utils.DfuAdapter$DfuHelperCallback
+-dontwarn com.realsil.sdk.dfu.utils.GattDfuAdapter
+-dontwarn org.apache.commons.lang3.StringUtils
+-dontwarn org.bouncycastle.jsse.BCSSLParameters
+-dontwarn org.bouncycastle.jsse.BCSSLSocket
+-dontwarn org.bouncycastle.jsse.provider.BouncyCastleJsseProvider
+-dontwarn org.conscrypt.Conscrypt$Version
+-dontwarn org.conscrypt.Conscrypt
+-dontwarn org.conscrypt.ConscryptHostnameVerifier
+-dontwarn org.openjsse.javax.net.ssl.SSLParameters
+-dontwarn org.openjsse.javax.net.ssl.SSLSocket
+-dontwarn org.openjsse.net.ssl.OpenJSSE

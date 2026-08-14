@@ -1,17 +1,24 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../domain/feature_models.dart';
 import '../domain/models.dart';
 import '../services/app_controller.dart';
+import '../services/app_update_service.dart';
 import '../services/device_weather_service.dart';
 import 'app_theme.dart';
 import 'brand_assets.dart';
+import 'device_sdk_badge.dart';
 
 class RegistrationPage extends StatefulWidget {
   const RegistrationPage({required this.controller, super.key});
@@ -219,26 +226,98 @@ class _PasswordRecoveryPageState extends State<PasswordRecoveryPage> {
   }
 }
 
-class HealthWarningPage extends StatelessWidget {
+class HealthWarningPage extends StatefulWidget {
   const HealthWarningPage({required this.controller, super.key});
 
   final AppController controller;
 
   @override
+  State<HealthWarningPage> createState() => _HealthWarningPageState();
+}
+
+class _HealthWarningPageState extends State<HealthWarningPage> {
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_refresh);
+    widget.controller.refreshNotifications();
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_refresh);
+    super.dispose();
+  }
+
+  void _refresh() {
+    if (mounted) setState(() {});
+  }
+
+  bool _isExplicitHealthWarning(Map<String, Object?> item) {
+    final type = [
+      item['type'],
+      item['category'],
+      item['message_type'],
+      item['notice_type'],
+    ].whereType<Object>().join(' ').toLowerCase();
+    return type.contains('health') ||
+        type.contains('warning') ||
+        type.contains('健康') ||
+        type.contains('预警');
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final warnings = widget.controller.notifications
+        .where(_isExplicitHealthWarning)
+        .toList();
+    final loading = widget.controller.notificationStatus == '正在加载';
     return Scaffold(
       appBar: AppBar(title: const Text('健康预警')),
       body: ListView(
         padding: const EdgeInsets.all(16),
-        children: const [
-          FeatureStateCard(
-            message: '当前暂无健康预警',
-            detail: '这里只显示已确认的提醒，不会根据单次测量自行判断疾病。',
-            icon: Icons.health_and_safety_outlined,
-            color: SaydianColors.green,
-          ),
-          SizedBox(height: 14),
-          FeatureStateCard(
+        children: [
+          if (loading)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(28),
+                child: CircularProgressIndicator(),
+              ),
+            )
+          else if (warnings.isEmpty)
+            FeatureStateCard(
+              message: '当前暂无健康预警',
+              detail:
+                  widget.controller.notificationStatus == '已加载' ||
+                      widget.controller.notificationStatus == '暂无消息'
+                  ? '这里只显示设备或服务端明确上报的事件，不会根据普通测量值自行判断疾病。'
+                  : '${widget.controller.notificationStatus}。不会用普通测量值生成预警。',
+              icon: Icons.health_and_safety_outlined,
+              color: SaydianColors.green,
+            )
+          else
+            for (final warning in warnings)
+              Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: ListTile(
+                  leading: const Icon(
+                    Icons.health_and_safety_outlined,
+                    color: SaydianColors.orange,
+                  ),
+                  title: Text(
+                    '${warning['title'] ?? warning['name'] ?? '健康提醒'}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(
+                    '${warning['content'] ?? warning['message'] ?? warning['created_at'] ?? '服务端已上报'}',
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+          const SizedBox(height: 14),
+          const FeatureStateCard(
             message: '如有明显不适，请及时咨询专业医务人员',
             detail: '手表测量结果用于日常健康管理参考。',
             icon: Icons.medical_information_outlined,
@@ -279,16 +358,307 @@ class SharingManagementPage extends StatelessWidget {
               Card(
                 margin: const EdgeInsets.only(bottom: 10),
                 child: ListTile(
+                  onTap: () {
+                    final memberId = int.tryParse(
+                      '${member['member_id'] ?? member['to_member_id'] ?? member['id'] ?? 0}',
+                    );
+                    if (memberId == null || memberId == 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('成员信息不完整，暂时无法设置共享项目')),
+                      );
+                      return;
+                    }
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => CareShareSettingsPage(
+                          controller: controller,
+                          member: member,
+                          memberId: memberId,
+                        ),
+                      ),
+                    );
+                  },
                   leading: const CircleAvatar(
                     child: Icon(Icons.person_outline),
                   ),
                   title: Text(
                     '${member['nickname'] ?? member['mobile'] ?? '关爱成员'}',
                   ),
-                  subtitle: const Text('仅显示对方已允许查看的内容'),
+                  subtitle: const Text('设置我允许对方查看的健康项目'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
                 ),
               ),
         ],
+      ),
+    );
+  }
+}
+
+class CareShareSettingsPage extends StatefulWidget {
+  const CareShareSettingsPage({
+    required this.controller,
+    required this.member,
+    required this.memberId,
+    super.key,
+  });
+
+  final AppController controller;
+  final Map<String, Object?> member;
+  final int memberId;
+
+  @override
+  State<CareShareSettingsPage> createState() => _CareShareSettingsPageState();
+}
+
+class _CareShareSettingsPageState extends State<CareShareSettingsPage> {
+  static const _dailyKeys = <String, String>{
+    'steps': '步数',
+    'reliang': '卡路里',
+    'juli': '距离',
+    'sleep': '总睡眠',
+  };
+  static const _healthKeys = <String, String>{
+    'bloodPressure': '血压',
+    'bloodGlucose': '血糖',
+    'bloodOxygen': '血氧',
+    'bodyTemperature': '体温',
+    'ecg': '心电图',
+    'heartReat': '心率',
+    'HRV': 'HRV',
+    'bodycomposition': '身体成分',
+    'bloodcomposition': '血液成分',
+  };
+
+  Set<String> _enabled = const {};
+  bool _loading = true;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final values = await widget.controller.loadCareShareSettings(
+        memberId: widget.memberId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _enabled = values;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = '共享设置服务暂不可用';
+        _loading = false;
+      });
+    }
+  }
+
+  void _setGroup(Iterable<String> keys, bool enabled) {
+    setState(() {
+      final values = {..._enabled};
+      enabled ? values.addAll(keys) : values.removeAll(keys);
+      _enabled = values;
+    });
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    final succeeded = await widget.controller.saveCareShareSettings(
+      memberId: widget.memberId,
+      settings: _enabled,
+    );
+    if (!mounted) return;
+    setState(() => _saving = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(succeeded ? '共享设置已保存' : '保存失败，请稍后重试')),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final name =
+        '${widget.member['nickname'] ?? widget.member['mobile'] ?? '关爱成员'}';
+    return Scaffold(
+      appBar: AppBar(title: const Text('共享数据管理')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                FeatureStateCard(
+                  message: name,
+                  detail: '只有已开启的项目会共享；关闭后保存即可撤销。',
+                  icon: Icons.privacy_tip_outlined,
+                  color: SaydianColors.green,
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  FeatureStateCard(
+                    message: _error!,
+                    detail: '当前不会更改任何授权项目。',
+                    icon: Icons.cloud_off_outlined,
+                  ),
+                ],
+                const SizedBox(height: 14),
+                _permissionGroup('每日数据', _dailyKeys),
+                const SizedBox(height: 12),
+                _permissionGroup('健康数据', _healthKeys),
+                const SizedBox(height: 18),
+                FilledButton.icon(
+                  onPressed: _saving || _error != null ? null : _save,
+                  icon: _saving
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.save_outlined),
+                  label: Text(_saving ? '保存中' : '保存共享设置'),
+                ),
+              ],
+            ),
+    );
+  }
+
+  Widget _permissionGroup(String title, Map<String, String> values) {
+    final allEnabled = values.keys.every(_enabled.contains);
+    return Card(
+      child: Column(
+        children: [
+          ListTile(
+            title: Text(
+              title,
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            trailing: TextButton(
+              onPressed: () => _setGroup(values.keys, !allEnabled),
+              child: Text(allEnabled ? '全部关闭' : '全选'),
+            ),
+          ),
+          for (final entry in values.entries) ...[
+            const Divider(indent: 16),
+            SwitchListTile(
+              title: Text(entry.value),
+              value: _enabled.contains(entry.key),
+              onChanged: (enabled) => _setGroup([entry.key], enabled),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class CareInvitationsPage extends StatefulWidget {
+  const CareInvitationsPage({required this.controller, super.key});
+
+  final AppController controller;
+
+  @override
+  State<CareInvitationsPage> createState() => _CareInvitationsPageState();
+}
+
+class _CareInvitationsPageState extends State<CareInvitationsPage> {
+  @override
+  void initState() {
+    super.initState();
+    unawaited(widget.controller.refreshCareInvitations());
+  }
+
+  Future<void> _respond(Map<String, Object?> invite, bool accepted) async {
+    final id = int.tryParse('${invite['id'] ?? 0}') ?? 0;
+    if (id == 0) return;
+    await widget.controller.respondCareInvitation(id: id, accepted: accepted);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('关爱邀请')),
+      body: ListenableBuilder(
+        listenable: widget.controller,
+        builder: (context, _) {
+          final invitations = widget.controller.careInvitations;
+          if (invitations.isEmpty) {
+            return RefreshIndicator(
+              onRefresh: widget.controller.refreshCareInvitations,
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  FeatureStateCard(
+                    message: widget.controller.careStatus == '服务暂不可用'
+                        ? '关爱邀请服务暂不可用'
+                        : '暂无新的关爱邀请',
+                    detail: '收到邀请后，可在这里明确同意或拒绝。',
+                    icon: Icons.mark_email_unread_outlined,
+                  ),
+                ],
+              ),
+            );
+          }
+          return RefreshIndicator(
+            onRefresh: widget.controller.refreshCareInvitations,
+            child: ListView.separated(
+              padding: const EdgeInsets.all(16),
+              itemCount: invitations.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final invite = invitations[index];
+                final member = invite['member'];
+                final memberMap = member is Map ? member : const {};
+                final status =
+                    int.tryParse('${invite['examine_status'] ?? 0}') ?? 0;
+                return Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${memberMap['nickname'] ?? memberMap['mobile'] ?? invite['mobile'] ?? '赛电用户'}',
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 8),
+                        if (status == 0)
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: () => _respond(invite, false),
+                                  child: const Text('拒绝'),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: FilledButton(
+                                  onPressed: () => _respond(invite, true),
+                                  child: const Text('同意'),
+                                ),
+                              ),
+                            ],
+                          )
+                        else
+                          Text(
+                            status == 1 ? '已同意' : '已拒绝',
+                            style: const TextStyle(color: SaydianColors.muted),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+        },
       ),
     );
   }
@@ -381,6 +751,11 @@ class HealthRecordDetailPage extends StatelessWidget {
               ),
             ),
           ],
+          if (record.metric == HealthMetric.ecg &&
+              record.samples.length > 1) ...[
+            const SizedBox(height: 12),
+            _EcgWaveformCard(samples: record.samples),
+          ],
           const SizedBox(height: 12),
           const FeatureStateCard(
             message: '查看长期趋势更有参考价值',
@@ -436,7 +811,11 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
     WidgetsBinding.instance.addObserver(this);
     _seenCameraShutter = widget.controller.cameraShutterSequence;
     widget.controller.addListener(_handleControllerEvent);
-    if (widget.controller.availabilityFor(widget.feature).isReady) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !widget.controller.availabilityFor(widget.feature).isReady) {
+        return;
+      }
       if (widget.feature == DeviceFeature.screenDisplay) {
         unawaited(_loadScreen());
       } else if (widget.feature == DeviceFeature.camera) {
@@ -444,7 +823,7 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
       } else if (widget.feature != DeviceFeature.findWatch) {
         unawaited(_loadFeature());
       }
-    }
+    });
   }
 
   @override
@@ -632,7 +1011,10 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
           body: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              _DeviceFeatureHeader(feature: widget.feature),
+              _DeviceFeatureHeader(
+                feature: widget.feature,
+                device: widget.controller.connectedDevice,
+              ),
               const SizedBox(height: 14),
               if (!availability.isReady)
                 FeatureStateCard(
@@ -721,23 +1103,16 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
                   children: [
                     for (var index = 0; index < faces.length; index++) ...[
                       ListTile(
-                        leading: Container(
-                          width: 46,
-                          height: 46,
-                          decoration: BoxDecoration(
-                            color: SaydianColors.blue.withValues(alpha: .1),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Icon(
-                            faces[index]['type'] == 'photo'
-                                ? Icons.photo_outlined
-                                : Icons.watch_later_outlined,
-                            color: SaydianColors.blue,
-                          ),
+                        minLeadingWidth: 64,
+                        leading: _WatchFaceThumbnail(
+                          face: faces[index],
+                          fallbackIndex: index,
                         ),
                         title: Text('${faces[index]['name'] ?? '手表表盘'}'),
                         subtitle: Text(
-                          faces[index]['isCurrent'] == true ? '当前使用' : '已安装在手表',
+                          faces[index]['isCurrent'] == true
+                              ? '当前使用'
+                              : '${faces[index]['status'] ?? '手表表盘'}',
                         ),
                         trailing: faces[index]['isCurrent'] == true
                             ? const Icon(
@@ -974,25 +1349,36 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
             ),
           ),
           const Divider(indent: 56),
-          _featureSwitch(
-            title: '手表蓝牙通话',
-            subtitle: '允许手表接听和拨打电话',
-            keyName: 'enabled',
-            busy: busy,
+          ListTile(
+            leading: Icon(
+              _featureData['audioEnabled'] == true
+                  ? Icons.volume_up_rounded
+                  : Icons.volume_off_outlined,
+            ),
+            title: const Text('通话与媒体声音'),
+            subtitle: Text(
+              _featureData['audioEnabled'] == true ? '手表媒体声音已连接' : '媒体声音尚未连接',
+            ),
           ),
-          const Divider(indent: 56),
-          _featureSwitch(
-            title: '通话与媒体声音',
-            subtitle: '在手表播放电话和手机音频',
-            keyName: 'audioEnabled',
-            busy: busy,
-          ),
-          const Divider(indent: 56),
-          _featureSwitch(
-            title: '自动连接',
-            subtitle: '手表靠近手机时自动恢复通话连接',
-            keyName: 'autoConnect',
-            busy: busy,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed:
+                    busy || _featureData['connectionStatus'] == 'connected'
+                    ? null
+                    : () => _saveFeature(const {
+                        'enabled': true,
+                      }, '已发送通话连接请求，请按系统提示完成配对'),
+                icon: const Icon(Icons.bluetooth_connected_rounded),
+                label: Text(
+                  _featureData['connectionStatus'] == 'connected'
+                      ? '通话连接已建立'
+                      : '建立通话连接',
+                ),
+              ),
+            ),
           ),
         ],
       ),
@@ -1177,41 +1563,10 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
   }
 
   Future<void> _chooseWeatherCity() async {
-    final cityController = TextEditingController();
     final city = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('选择城市'),
-        content: TextField(
-          controller: cityController,
-          autofocus: true,
-          textInputAction: TextInputAction.done,
-          decoration: const InputDecoration(
-            labelText: '城市名称',
-            hintText: '例如：深圳',
-          ),
-          onSubmitted: (value) {
-            if (value.trim().isNotEmpty) {
-              Navigator.pop(dialogContext, value.trim());
-            }
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final value = cityController.text.trim();
-              if (value.isNotEmpty) Navigator.pop(dialogContext, value);
-            },
-            child: const Text('确定'),
-          ),
-        ],
-      ),
+      builder: (_) => const _CityInputDialog(),
     );
-    cityController.dispose();
     if (city == null || !mounted) return;
     await _syncWeather(city: city);
   }
@@ -1535,49 +1890,10 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
   }
 
   Future<void> _showContactEditor() async {
-    final name = TextEditingController();
-    final phone = TextEditingController();
     final values = await showDialog<Map<String, Object?>>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('添加联系人'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: name,
-              autofocus: true,
-              maxLength: 12,
-              decoration: const InputDecoration(labelText: '姓名'),
-            ),
-            TextField(
-              controller: phone,
-              keyboardType: TextInputType.phone,
-              decoration: const InputDecoration(labelText: '电话号码'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () {
-              if (name.text.trim().isEmpty || phone.text.trim().isEmpty) return;
-              Navigator.pop(dialogContext, <String, Object?>{
-                'operation': 'add',
-                'name': name.text.trim(),
-                'phone': phone.text.trim(),
-              });
-            },
-            child: const Text('保存'),
-          ),
-        ],
-      ),
+      builder: (_) => const _ContactEditorDialog(),
     );
-    name.dispose();
-    phone.dispose();
     if (values != null) await _saveFeature(values, '联系人已添加');
   }
 
@@ -1912,10 +2228,176 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
       false;
 }
 
+class _WatchFaceThumbnail extends StatelessWidget {
+  const _WatchFaceThumbnail({required this.face, required this.fallbackIndex});
+
+  final Map<String, Object?> face;
+  final int fallbackIndex;
+
+  @override
+  Widget build(BuildContext context) {
+    final source = _imageSource;
+    final fallback = _fallback;
+    Widget image = fallback;
+    if (source != null) {
+      final uri = Uri.tryParse(source);
+      if (uri != null && uri.isScheme('https')) {
+        image = Image.network(
+          source,
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => fallback,
+        );
+      } else {
+        final file = File(source.replaceFirst('file://', ''));
+        if (file.existsSync()) image = Image.file(file, fit: BoxFit.cover);
+      }
+    }
+    return Semantics(
+      image: true,
+      label: source == null
+          ? '${face['name'] ?? '表盘'}示意缩图'
+          : '${face['name'] ?? '表盘'}缩略图',
+      child: Container(
+        width: 62,
+        height: 62,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: const Color(0xFF111827),
+          borderRadius: BorderRadius.circular(17),
+          border: Border.all(color: Colors.black12),
+        ),
+        child: image,
+      ),
+    );
+  }
+
+  String? get _imageSource {
+    for (final key in const [
+      'thumbnail',
+      'thumbnailUrl',
+      'preview',
+      'previewUrl',
+      'image',
+      'imageUrl',
+      'background',
+      'filePath',
+    ]) {
+      final value = '${face[key] ?? ''}'.trim();
+      if (value.isNotEmpty) return value;
+    }
+    return null;
+  }
+
+  Widget get _fallback => Stack(
+    fit: StackFit.expand,
+    children: [
+      CustomPaint(
+        painter: _WatchFacePreviewPainter(
+          index: (face['index'] as num?)?.toInt() ?? fallbackIndex,
+          type: '${face['type'] ?? ''}',
+        ),
+      ),
+      const Positioned(
+        right: 3,
+        bottom: 3,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Color(0x99000000),
+            borderRadius: BorderRadius.all(Radius.circular(4)),
+          ),
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+            child: Text(
+              '示意',
+              style: TextStyle(color: Colors.white, fontSize: 7),
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
+class _WatchFacePreviewPainter extends CustomPainter {
+  const _WatchFacePreviewPainter({required this.index, required this.type});
+
+  final int index;
+  final String type;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final palettes = <List<Color>>[
+      const [Color(0xFF071B33), Color(0xFF1F87FF)],
+      const [Color(0xFF251135), Color(0xFFB55CFF)],
+      const [Color(0xFF062A26), Color(0xFF2DD4BF)],
+      const [Color(0xFF3B160D), Color(0xFFFF8A4C)],
+    ];
+    final palette = palettes[index.abs() % palettes.length];
+    final rect = Offset.zero & size;
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: palette,
+        ).createShader(rect),
+    );
+    final center = Offset(size.width / 2, size.height / 2);
+    if (type == 'photo') {
+      canvas.drawCircle(
+        center,
+        size.shortestSide * .27,
+        Paint()..color = Colors.white.withValues(alpha: .18),
+      );
+      _text(canvas, size, 'PHOTO', 7, size.height * .67, .7);
+      return;
+    }
+    _text(canvas, size, '${10 + index % 3}:28', 17, size.height * .27, 1);
+    _text(canvas, size, 'AUG 14', 7, size.height * .60, .78);
+    canvas.drawLine(
+      Offset(size.width * .22, size.height * .78),
+      Offset(size.width * .78, size.height * .78),
+      Paint()
+        ..color = Colors.white.withValues(alpha: .7)
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  void _text(
+    Canvas canvas,
+    Size size,
+    String value,
+    double fontSize,
+    double y,
+    double opacity,
+  ) {
+    final painter = TextPainter(
+      text: TextSpan(
+        text: value,
+        style: TextStyle(
+          color: Colors.white.withValues(alpha: opacity),
+          fontSize: fontSize,
+          fontWeight: FontWeight.w800,
+          letterSpacing: .4,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    painter.paint(canvas, Offset((size.width - painter.width) / 2, y));
+  }
+
+  @override
+  bool shouldRepaint(_WatchFacePreviewPainter oldDelegate) =>
+      oldDelegate.index != index || oldDelegate.type != type;
+}
+
 class _DeviceFeatureHeader extends StatelessWidget {
-  const _DeviceFeatureHeader({required this.feature});
+  const _DeviceFeatureHeader({required this.feature, required this.device});
 
   final DeviceFeature feature;
+  final DeviceInfo? device;
 
   @override
   Widget build(BuildContext context) {
@@ -1957,10 +2439,77 @@ class _DeviceFeatureHeader extends StatelessWidget {
                     height: 1.4,
                   ),
                 ),
+                if (device != null) ...[
+                  const SizedBox(height: 8),
+                  DeviceSdkBadge(source: device!.sdkSource, compact: true),
+                ],
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _EcgWaveformCard extends StatelessWidget {
+  const _EcgWaveformCard({required this.samples});
+
+  final List<num> samples;
+
+  @override
+  Widget build(BuildContext context) {
+    final stride = math.max(1, (samples.length / 800).ceil());
+    final visible = <num>[
+      for (var index = 0; index < samples.length; index += stride)
+        samples[index],
+    ];
+    final spots = visible
+        .asMap()
+        .entries
+        .map((entry) => FlSpot(entry.key.toDouble(), entry.value.toDouble()))
+        .toList();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 16, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('心电波形', style: TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 12),
+            Semantics(
+              label: '设备记录的心电波形，共${samples.length}个采样点',
+              child: SizedBox(
+                height: 180,
+                child: LineChart(
+                  LineChartData(
+                    gridData: FlGridData(
+                      getDrawingHorizontalLine: (_) => FlLine(
+                        color: SaydianColors.pink.withValues(alpha: 0.12),
+                        strokeWidth: 1,
+                      ),
+                      getDrawingVerticalLine: (_) => FlLine(
+                        color: SaydianColors.pink.withValues(alpha: 0.08),
+                        strokeWidth: 1,
+                      ),
+                    ),
+                    borderData: FlBorderData(show: false),
+                    titlesData: const FlTitlesData(show: false),
+                    lineTouchData: const LineTouchData(enabled: false),
+                    lineBarsData: [
+                      LineChartBarData(
+                        spots: spots,
+                        color: SaydianColors.pink,
+                        barWidth: 1.8,
+                        dotData: const FlDotData(show: false),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2220,6 +2769,13 @@ class _FeedbackPageState extends State<FeedbackPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Text(
+            '问题反馈',
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 14),
           DropdownButtonFormField<String>(
             initialValue: _category,
             decoration: const InputDecoration(labelText: '问题类型'),
@@ -2259,6 +2815,33 @@ class _FeedbackPageState extends State<FeedbackPage> {
           ],
           const SizedBox(height: 18),
           FilledButton(onPressed: _submit, child: const Text('提交反馈')),
+          const SizedBox(height: 28),
+          Text(
+            '常见问题',
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 10),
+          const Card(
+            child: Column(
+              children: [
+                ExpansionTile(
+                  title: Text('如何连接手表？'),
+                  childrenPadding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  children: [Text('打开“设备”页并选择添加设备。搜索时让手表保持亮屏、靠近手机，并在手表端确认配对。')],
+                ),
+                Divider(height: 1),
+                ExpansionTile(
+                  title: Text('为什么健康数据暂时为空？'),
+                  childrenPadding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  children: [
+                    Text('请确认设备已连接并完成同步。设备不支持的项目不会开放入口；新测量数据同步后才会显示趋势。'),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -2268,24 +2851,209 @@ class _FeedbackPageState extends State<FeedbackPage> {
 class CustomerServicePage extends StatelessWidget {
   const CustomerServicePage({super.key});
 
+  static const _phone = '4006386738';
+  static const _officialAccount = '赛电';
+
+  Future<void> _call(BuildContext context) async {
+    final opened = await launchUrl(Uri(scheme: 'tel', path: _phone));
+    if (!opened && context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('无法打开拨号界面，请手动拨打 $_phone')));
+    }
+  }
+
+  Future<void> _copyAccount(BuildContext context) async {
+    await Clipboard.setData(const ClipboardData(text: _officialAccount));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('公众号“$_officialAccount”已复制，可前往微信搜索添加')),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('联系客服')),
-      body: const Padding(
-        padding: EdgeInsets.all(16),
-        child: FeatureStateCard(
-          message: '此功能暂时无法使用，请稍后再试',
-          detail: '客服联系方式确认后会在这里提供，请勿向陌生账号发送个人健康信息。',
-          icon: Icons.headset_mic_outlined,
-        ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const CircleAvatar(
+                    child: Icon(Icons.phone_outlined),
+                  ),
+                  title: const Text('联系电话'),
+                  subtitle: const Text(_phone),
+                  trailing: FilledButton.tonal(
+                    onPressed: () => _call(context),
+                    child: const Text('拨打电话'),
+                  ),
+                ),
+                const Divider(indent: 72, height: 1),
+                ListTile(
+                  leading: const CircleAvatar(
+                    child: Icon(Icons.wechat_rounded),
+                  ),
+                  title: const Text('公众号'),
+                  subtitle: const Text(_officialAccount),
+                  trailing: FilledButton.tonal(
+                    onPressed: () => _copyAccount(context),
+                    child: const Text('添加客服'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          const FeatureStateCard(
+            message: '联系前请准备设备型号和问题发生时间',
+            detail: '请勿向非官方账号发送验证码、密码或完整健康记录。',
+            icon: Icons.privacy_tip_outlined,
+          ),
+        ],
       ),
     );
   }
 }
 
-class AboutSaydianPage extends StatelessWidget {
-  const AboutSaydianPage({super.key});
+class AboutSaydianPage extends StatefulWidget {
+  const AboutSaydianPage({
+    required this.controller,
+    this.updateService,
+    this.packageInfoLoader,
+    super.key,
+  });
+
+  final AppController controller;
+  final AppUpdateService? updateService;
+  final Future<PackageInfo> Function()? packageInfoLoader;
+
+  @override
+  State<AboutSaydianPage> createState() => _AboutSaydianPageState();
+}
+
+class _AboutSaydianPageState extends State<AboutSaydianPage> {
+  late final AppUpdateService _updateService;
+  String _version = '--';
+  String _build = '--';
+  String _introduction = '记录日常健康趋势，连接家人与设备，让健康管理更简单。';
+  bool _checking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _updateService = widget.updateService ?? AppUpdateService();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    try {
+      final package =
+          await (widget.packageInfoLoader ?? PackageInfo.fromPlatform)();
+      if (mounted) {
+        setState(() {
+          _version = package.version;
+          _build = package.buildNumber;
+        });
+      }
+    } catch (_) {
+      // Version remains explicitly unavailable instead of being hard-coded.
+    }
+    final article = await widget.controller.loadSingleArticle(14);
+    final raw = '${article['content'] ?? article['description'] ?? ''}';
+    final plain = _aboutPlainText(raw);
+    if (mounted && plain.isNotEmpty) setState(() => _introduction = plain);
+  }
+
+  void _openLegal(int id, String title) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _SingleArticlePage(
+          controller: widget.controller,
+          articleId: id,
+          fallbackTitle: title,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _checkUpdate() async {
+    if (_checking) return;
+    setState(() => _checking = true);
+    try {
+      final info = await _updateService.check();
+      if (!mounted) return;
+      if (!info.hasUpdate) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('当前已是最新版本 V${info.currentVersion}')),
+        );
+        return;
+      }
+      await showModalBottomSheet<void>(
+        context: context,
+        showDragHandle: true,
+        builder: (sheetContext) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '发现新版本 V${info.latestVersion}',
+                  style: Theme.of(
+                    sheetContext,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 8),
+                Text('当前版本 V${info.currentVersion} · 构建 ${info.currentBuild}'),
+                if (info.releaseNotes.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  Text(info.releaseNotes, style: const TextStyle(height: 1.5)),
+                ],
+                if (info.forceUpdate) ...[
+                  const SizedBox(height: 12),
+                  const Text('此版本包含必要兼容性更新。'),
+                ],
+                const SizedBox(height: 22),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: () async {
+                      Navigator.of(sheetContext).pop();
+                      try {
+                        await _updateService.openDownload(info);
+                      } on AppUpdateException catch (error) {
+                        if (mounted) _message(error.message);
+                      }
+                    },
+                    child: Text(Platform.isIOS ? '前往 App Store 更新' : '前往更新'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    } on AppUpdateException catch (error) {
+      if (mounted) _message(error.message);
+    } on FormatException {
+      if (mounted) _message('版本信息格式不正确');
+    } catch (_) {
+      if (mounted) _message('暂时无法检查更新，请稍后再试');
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
+  }
+
+  void _message(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2293,23 +3061,64 @@ class AboutSaydianPage extends StatelessWidget {
       appBar: AppBar(title: const Text('关于我们')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(24, 38, 24, 24),
-        children: const [
-          Center(child: SaydianBrandLockup(width: 176)),
-          SizedBox(height: 26),
-          Text(
+        children: [
+          const Center(child: SaydianBrandLockup(width: 176)),
+          const SizedBox(height: 26),
+          const Text(
             '赛电健康',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
           ),
-          SizedBox(height: 8),
+          const SizedBox(height: 8),
           Text(
-            '记录日常健康趋势，连接家人与设备，让健康管理更简单。',
+            _introduction,
             textAlign: TextAlign.center,
             style: TextStyle(color: SaydianColors.muted, height: 1.6),
           ),
-          SizedBox(height: 24),
-          FeatureStateCard(
-            message: '版本 0.1.8',
+          const SizedBox(height: 12),
+          Text(
+            _build == '--' ? 'V$_version' : 'V$_version ($_build)',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: SaydianColors.muted),
+          ),
+          const SizedBox(height: 24),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.privacy_tip_outlined),
+                  title: const Text('隐私政策'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _openLegal(3, '隐私政策'),
+                ),
+                const Divider(indent: 56, height: 1),
+                ListTile(
+                  leading: const Icon(Icons.description_outlined),
+                  title: const Text('用户协议'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _openLegal(2, '用户协议'),
+                ),
+                const Divider(indent: 56, height: 1),
+                ListTile(
+                  leading: const Icon(Icons.system_update_alt_rounded),
+                  title: const Text('检查更新'),
+                  subtitle: Text(
+                    _updateService.isConfigured ? '通过安全版本服务检查更新' : '在线更新服务暂未配置',
+                  ),
+                  trailing: _checking
+                      ? const SizedBox.square(
+                          dimension: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.chevron_right_rounded),
+                  onTap: _checking ? null : _checkUpdate,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 18),
+          const FeatureStateCard(
+            message: '健康数据说明',
             detail: '测量结果仅供健康管理参考，不用于诊断或治疗。',
             icon: Icons.info_outline_rounded,
           ),
@@ -2318,6 +3127,70 @@ class AboutSaydianPage extends StatelessWidget {
     );
   }
 }
+
+class _SingleArticlePage extends StatefulWidget {
+  const _SingleArticlePage({
+    required this.controller,
+    required this.articleId,
+    required this.fallbackTitle,
+  });
+
+  final AppController controller;
+  final int articleId;
+  final String fallbackTitle;
+
+  @override
+  State<_SingleArticlePage> createState() => _SingleArticlePageState();
+}
+
+class _SingleArticlePageState extends State<_SingleArticlePage> {
+  Map<String, Object?>? _article;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    final value = await widget.controller.loadSingleArticle(widget.articleId);
+    if (mounted) setState(() => _article = value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final article = _article;
+    final title = '${article?['title'] ?? widget.fallbackTitle}';
+    final content = _aboutPlainText(
+      '${article?['content'] ?? article?['description'] ?? ''}',
+    );
+    return Scaffold(
+      appBar: AppBar(title: Text(title)),
+      body: article == null
+          ? const Center(child: CircularProgressIndicator())
+          : content.isEmpty
+          ? const Center(child: Text('内容暂时无法加载'))
+          : ListView(
+              padding: const EdgeInsets.all(20),
+              children: [Text(content, style: const TextStyle(height: 1.75))],
+            ),
+    );
+  }
+}
+
+String _aboutPlainText(String raw) => raw
+    .replaceAll(RegExp(r'<\s*br\s*/?\s*>', caseSensitive: false), '\n')
+    .replaceAll(
+      RegExp(r'</\s*(p|li|h[1-6]|div)\s*>', caseSensitive: false),
+      '\n',
+    )
+    .replaceAll(RegExp(r'<[^>]*>'), '')
+    .replaceAll('&nbsp;', ' ')
+    .replaceAll('&amp;', '&')
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll(RegExp(r'\n\s*\n\s*\n+'), '\n\n')
+    .trim();
 
 class SecurityCenterPage extends StatelessWidget {
   const SecurityCenterPage({super.key});
@@ -2457,6 +3330,106 @@ class FeatureStateCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _CityInputDialog extends StatefulWidget {
+  const _CityInputDialog();
+
+  @override
+  State<_CityInputDialog> createState() => _CityInputDialogState();
+}
+
+class _CityInputDialogState extends State<_CityInputDialog> {
+  final _city = TextEditingController();
+
+  @override
+  void dispose() {
+    _city.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final value = _city.text.trim();
+    if (value.isNotEmpty) Navigator.pop(context, value);
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('选择城市'),
+    content: TextField(
+      controller: _city,
+      autofocus: true,
+      textInputAction: TextInputAction.done,
+      decoration: const InputDecoration(labelText: '城市名称', hintText: '例如：深圳'),
+      onSubmitted: (_) => _submit(),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('取消'),
+      ),
+      FilledButton(onPressed: _submit, child: const Text('确定')),
+    ],
+  );
+}
+
+class _ContactEditorDialog extends StatefulWidget {
+  const _ContactEditorDialog();
+
+  @override
+  State<_ContactEditorDialog> createState() => _ContactEditorDialogState();
+}
+
+class _ContactEditorDialogState extends State<_ContactEditorDialog> {
+  final _name = TextEditingController();
+  final _phone = TextEditingController();
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _phone.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final name = _name.text.trim();
+    final phone = _phone.text.trim();
+    if (name.isEmpty || phone.isEmpty) return;
+    Navigator.pop(context, <String, Object?>{
+      'operation': 'add',
+      'name': name,
+      'phone': phone,
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('添加联系人'),
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TextField(
+          controller: _name,
+          autofocus: true,
+          maxLength: 12,
+          decoration: const InputDecoration(labelText: '姓名'),
+        ),
+        TextField(
+          controller: _phone,
+          keyboardType: TextInputType.phone,
+          decoration: const InputDecoration(labelText: '电话号码'),
+          onSubmitted: (_) => _submit(),
+        ),
+      ],
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('取消'),
+      ),
+      FilledButton(onPressed: _submit, child: const Text('保存')),
+    ],
+  );
 }
 
 IconData _deviceFeatureIcon(DeviceFeature feature) => switch (feature) {

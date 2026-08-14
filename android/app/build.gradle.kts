@@ -8,10 +8,6 @@ val veepooSdkArtifacts =
     listOf(
         "vpprotocol-2.3.77.15.aar",
         "vpbluetooth-1.20.aar",
-        "JL_Watch_V1.13.1_11214-release.aar",
-        "jl_rcsp_V0.7.2_527-release.aar",
-        "jl_bt_ota_V1.10.0_10931-release.aar",
-        "BmpConvert_V1.6.0_10604-release.aar",
         "abpartool-release.aar",
     )
 val veepooSdkFiles = veepooSdkArtifacts.map { file("libs/$it") }

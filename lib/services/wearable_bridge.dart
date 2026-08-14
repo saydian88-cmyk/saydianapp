@@ -46,12 +46,16 @@ class MethodChannelWearableBridge implements WearableBridge {
   MethodChannelWearableBridge({
     MethodChannel? methods,
     EventChannel? eventChannel,
+    this.operationTimeout = const Duration(seconds: 30),
+    this.syncTimeout = const Duration(minutes: 3),
   }) : _methods = methods ?? const MethodChannel('cc.saidian/wearable_methods'),
        _eventChannel =
            eventChannel ?? const EventChannel('cc.saidian/wearable_events');
 
   final MethodChannel _methods;
   final EventChannel _eventChannel;
+  final Duration operationTimeout;
+  final Duration syncTimeout;
   final SerialOperationQueue _queue = SerialOperationQueue();
   static const _deviceFeatureTimeout = Duration(seconds: 20);
   static const _watchFaceTimeout = Duration(minutes: 3);
@@ -64,7 +68,8 @@ class MethodChannelWearableBridge implements WearableBridge {
 
   @override
   Future<List<DeviceInfo>> scanDevices() => _queue.run(() async {
-    final result = await _invoke<List<Object?>>('scanDevices') ?? const [];
+    final result =
+        await _invokeOperation<List<Object?>>('scanDevices') ?? const [];
     return result
         .whereType<Map<Object?, Object?>>()
         .map(DeviceInfo.fromMap)
@@ -72,67 +77,73 @@ class MethodChannelWearableBridge implements WearableBridge {
   });
 
   @override
-  Future<void> stopScan() => _invoke<void>('stopScan');
+  Future<void> stopScan() => _invokeOperation<void>('stopScan');
 
   @override
   Future<void> connect(
     String deviceId, {
     required WearableUserProfile profile,
   }) => _queue.run(
-    () => _invoke<void>('connect', {
+    () => _invokeOperation<void>('connect', {
       'deviceId': deviceId,
       'profile': profile.toMap(),
     }),
   );
 
   @override
-  Future<void> disconnect() => _invoke<void>('disconnect');
+  Future<void> disconnect() => _invokeOperation<void>('disconnect');
 
   @override
   Future<DeviceCapabilities> getCapabilities() => _queue.run(() async {
     final result =
-        await _invoke<Map<Object?, Object?>>('getCapabilities') ??
+        await _invokeOperation<Map<Object?, Object?>>('getCapabilities') ??
         const <Object?, Object?>{};
     return DeviceCapabilities.fromMap(result);
   });
 
   @override
-  Future<List<HealthRecord>> syncHealthData({String? cursor}) => _queue.run(
-    () async {
-      final result =
-          await _invoke<List<Object?>>('syncHealthData', {'cursor': cursor}) ??
-          const [];
-      return result
-          .whereType<Map<Object?, Object?>>()
-          .map(
-            (item) => HealthRecord.fromJson(
-              item.map((key, value) => MapEntry('$key', value)),
-            ),
-          )
-          .toList();
-    },
-  );
+  Future<List<HealthRecord>> syncHealthData({String? cursor}) =>
+      _queue.run(() async {
+        final result =
+            await _invokeSync<List<Object?>>('syncHealthData', {
+              'cursor': cursor,
+            }) ??
+            const [];
+        return result
+            .whereType<Map<Object?, Object?>>()
+            .map(
+              (item) => HealthRecord.fromJson(
+                item.map((key, value) => MapEntry('$key', value)),
+              ),
+            )
+            .toList();
+      });
 
   @override
   Future<void> startMeasurement(HealthMetric metric) => _queue.run(
-    () => _invoke<void>('startMeasurement', {'metric': metric.wireName}),
+    () =>
+        _invokeOperation<void>('startMeasurement', {'metric': metric.wireName}),
   );
 
   @override
   Future<void> stopMeasurement(HealthMetric metric) => _queue.run(
-    () => _invoke<void>('stopMeasurement', {'metric': metric.wireName}),
+    () =>
+        _invokeOperation<void>('stopMeasurement', {'metric': metric.wireName}),
   );
 
   @override
-  Future<void> startSport(SportMode mode) =>
-      _queue.run(() => _invoke<void>('startSport', {'mode': mode.wireName}));
+  Future<void> startSport(SportMode mode) => _queue.run(
+    () => _invokeOperation<void>('startSport', {'mode': mode.wireName}),
+  );
 
   @override
-  Future<void> stopSport() => _queue.run(() => _invoke<void>('stopSport'));
+  Future<void> stopSport() =>
+      _queue.run(() => _invokeOperation<void>('stopSport'));
 
   @override
   Future<List<SportRecord>> readSportRecords() => _queue.run(() async {
-    final result = await _invoke<List<Object?>>('readSportRecords') ?? const [];
+    final result =
+        await _invokeSync<List<Object?>>('readSportRecords') ?? const [];
     return result
         .whereType<Map<Object?, Object?>>()
         .map(SportRecord.fromMap)
@@ -142,14 +153,16 @@ class MethodChannelWearableBridge implements WearableBridge {
   @override
   Future<Map<String, bool>> readAutoMeasureSettings() => _queue.run(() async {
     final result =
-        await _invoke<Map<Object?, Object?>>('readAutoMeasureSettings') ??
+        await _invokeOperation<Map<Object?, Object?>>(
+          'readAutoMeasureSettings',
+        ) ??
         const {};
     return result.map((key, value) => MapEntry('$key', value == true));
   });
 
   @override
   Future<void> setAutoMeasureSetting(String type, bool enabled) => _queue.run(
-    () => _invoke<void>('setAutoMeasureSetting', {
+    () => _invokeOperation<void>('setAutoMeasureSetting', {
       'type': type,
       'enabled': enabled,
     }),
@@ -157,11 +170,12 @@ class MethodChannelWearableBridge implements WearableBridge {
 
   @override
   Future<int?> readHeartRateWarning() =>
-      _queue.run(() => _invoke<int>('readHeartRateWarning'));
+      _queue.run(() => _invokeOperation<int>('readHeartRateWarning'));
 
   @override
-  Future<void> setHeartRateWarning(int value) =>
-      _queue.run(() => _invoke<void>('setHeartRateWarning', {'value': value}));
+  Future<void> setHeartRateWarning(int value) => _queue.run(
+    () => _invokeOperation<void>('setHeartRateWarning', {'value': value}),
+  );
 
   @override
   Future<Map<String, Object?>> readDeviceFeature(DeviceFeature feature) =>
@@ -222,4 +236,12 @@ class MethodChannelWearableBridge implements WearableBridge {
       throw const WearableSdkNotConfigured();
     }
   }
+
+  Future<T?> _invokeOperation<T>(
+    String method, [
+    Map<String, Object?>? arguments,
+  ]) => _invoke<T>(method, arguments).timeout(operationTimeout);
+
+  Future<T?> _invokeSync<T>(String method, [Map<String, Object?>? arguments]) =>
+      _invoke<T>(method, arguments).timeout(syncTimeout);
 }

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:saydian_app/domain/feature_models.dart';
 import 'package:saydian_app/domain/models.dart';
 import 'package:saydian_app/services/api_client.dart';
@@ -11,6 +12,7 @@ import 'package:saydian_app/services/local_health_store.dart';
 import 'package:saydian_app/services/secure_vault.dart';
 import 'package:saydian_app/services/wearable_bridge.dart';
 import 'package:saydian_app/ui/pages.dart';
+import 'package:saydian_app/ui/device_sdk_badge.dart';
 import 'package:saydian_app/ui/prototype_pages.dart';
 
 void main() {
@@ -95,8 +97,9 @@ void main() {
     )..isBooting = false;
     addTearDown(controller.dispose);
     await controller.connectDevice(
-      const DeviceInfo(id: 'WATCH:01', name: 'Test Watch', model: 'JL'),
+      const DeviceInfo(id: 'veepoo:WATCH:01', name: 'Test Watch', model: 'JL'),
     );
+    expect(controller.connectedDevice?.sdkSource, WearableSdkSource.veepoo);
 
     final cases = <DeviceFeature, String>{
       DeviceFeature.watchFaces: '系统表盘 1',
@@ -121,7 +124,42 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text(entry.value), findsOneWidget, reason: entry.key.name);
+      final badge = tester.widget<DeviceSdkBadge>(find.byType(DeviceSdkBadge));
+      expect(badge.source, WearableSdkSource.veepoo, reason: entry.key.name);
+      if (entry.key == DeviceFeature.watchFaces) {
+        expect(find.text('示意'), findsOneWidget);
+      }
     }
+  });
+
+  testWidgets('feature page defers device reads until after its first frame', (
+    tester,
+  ) async {
+    final controller = AppController(
+      MemorySessionVault(),
+      _CoverageApi(),
+      MemoryHealthStore(),
+      _FeatureWearable(),
+    )..isBooting = false;
+    addTearDown(controller.dispose);
+    await controller.connectDevice(
+      const DeviceInfo(id: 'yucheng:WATCH:01', name: 'Test Watch', model: 'JL'),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ListenableBuilder(
+          listenable: controller,
+          builder: (_, _) => DeviceFeaturePage(
+            controller: controller,
+            feature: DeviceFeature.screenDisplay,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('password recovery validates input without claiming success', (
@@ -137,6 +175,46 @@ void main() {
     expect(find.text('请输入正确的中国大陆手机号'), findsOneWidget);
   });
 
+  testWidgets('about, contact and feedback pages follow the prototype flow', (
+    tester,
+  ) async {
+    final controller = _controller();
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AboutSaydianPage(
+          controller: controller,
+          packageInfoLoader: () async => PackageInfo(
+            appName: '赛电健康',
+            packageName: 'com.saydian.app',
+            version: '0.1.12',
+            buildNumber: '14',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('V0.1.12 (14)'), findsOneWidget);
+    expect(find.text('隐私政策'), findsOneWidget);
+    expect(find.text('用户协议'), findsOneWidget);
+    expect(find.text('检查更新'), findsOneWidget);
+    expect(find.text('在线更新服务暂未配置'), findsOneWidget);
+
+    await tester.pumpWidget(const MaterialApp(home: CustomerServicePage()));
+    await tester.pumpAndSettle();
+    expect(find.text('4006386738'), findsOneWidget);
+    expect(find.text('公众号'), findsOneWidget);
+    expect(find.text('赛电'), findsOneWidget);
+    expect(find.text('添加客服'), findsOneWidget);
+
+    await tester.pumpWidget(const MaterialApp(home: FeedbackPage()));
+    await tester.pumpAndSettle();
+    expect(find.text('问题反馈'), findsOneWidget);
+    await tester.drag(find.byType(ListView).last, const Offset(0, -600));
+    await tester.pumpAndSettle();
+    expect(find.text('常见问题'), findsOneWidget);
+  });
+
   test('release UI source does not contain developer-facing copy', () {
     final source = [
       'lib/app.dart',
@@ -145,8 +223,6 @@ void main() {
       'lib/ui/prototype_pages.dart',
     ].map((path) => File(path).readAsStringSync()).join('\n');
     for (final banned in [
-      'Veepoo',
-      'SDK',
       'BLE',
       '接口未配置',
       '错误码',
@@ -168,7 +244,18 @@ AppController _controller() => AppController(
   _CoverageWearable(),
 )..isBooting = false;
 
-class _CoverageApi extends Fake implements SaydianApi {}
+class _CoverageApi extends Fake implements SaydianApi {
+  @override
+  Future<Map<String, Object?>> getSingleArticle(int id) async => {
+    'id': id,
+    'title': switch (id) {
+      2 => '用户协议',
+      3 => '隐私政策',
+      _ => '关于赛电',
+    },
+    'content': '<p>赛电健康服务说明</p>',
+  };
+}
 
 class _CoverageWearable extends Fake implements WearableBridge {
   @override

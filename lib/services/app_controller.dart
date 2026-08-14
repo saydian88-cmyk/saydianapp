@@ -14,6 +14,7 @@ import 'local_health_store.dart';
 import 'secure_vault.dart';
 import 'sync_service.dart';
 import 'wearable_bridge.dart';
+import 'wearable_bootstrap.dart';
 
 class AppController extends ChangeNotifier {
   AppController(this._vault, this._api, this._healthStore, this._wearable)
@@ -25,7 +26,7 @@ class AppController extends ChangeNotifier {
       vault,
       SaydianApiClient(vault),
       EncryptedHealthStore(vault),
-      MethodChannelWearableBridge(),
+      createProductionWearableBridge(),
     );
   }
 
@@ -56,6 +57,7 @@ class AppController extends ChangeNotifier {
   String storageStatus = '正在准备数据';
   String sdkStatus = '等待连接';
   String syncStatus = '尚未同步';
+  String cloudSyncStatus = '尚未上传';
   DeviceInfo? connectedDevice;
   DeviceCapabilities? capabilities;
   SportMode? activeSport;
@@ -63,6 +65,8 @@ class AppController extends ChangeNotifier {
   List<HealthRecord> healthRecords = const [];
   List<SportRecord> sportRecords = const [];
   List<Map<String, Object?>> careMembers = const [];
+  List<Map<String, Object?>> careInvitations = const [];
+  String careStatus = '等待加载';
   List<Map<String, Object?>> aiArticles = const [];
   List<Map<String, Object?>> aiMessages = const [];
   List<Map<String, Object?>> notifications = const [];
@@ -108,7 +112,7 @@ class AppController extends ChangeNotifier {
     try {
       await _healthStore.initialize();
       storageStatus = '数据已安全保存在本机';
-      healthRecords = await _healthStore.recent();
+      await _refreshHealthRecordCache();
     } catch (_) {
       storageStatus = '本机数据暂时无法读取';
     }
@@ -138,6 +142,7 @@ class AppController extends ChangeNotifier {
     unawaited(refreshAiArticles());
     if (session != null) {
       unawaited(refreshCare());
+      unawaited(refreshCareInvitations());
       unawaited(refreshMemberProfile());
       unawaited(refreshActivityGoals());
     }
@@ -153,6 +158,7 @@ class AppController extends ChangeNotifier {
       session = await _api.login(username.trim(), password);
       isPreviewMode = false;
       await refreshCare();
+      await refreshCareInvitations();
       await refreshMemberProfile();
       await refreshActivityGoals();
     });
@@ -173,6 +179,7 @@ class AppController extends ChangeNotifier {
       session = await _api.register(mobile.trim(), password);
       isPreviewMode = false;
       await refreshCare();
+      await refreshCareInvitations();
       await refreshMemberProfile();
       await refreshActivityGoals();
     });
@@ -298,7 +305,13 @@ class AppController extends ChangeNotifier {
       }
       if (deviceState == DeviceConnectionState.scanning) {
         deviceMachine.transition(DeviceConnectionState.connecting);
-        await _wearable.stopScan();
+        try {
+          await _wearable.stopScan().timeout(const Duration(seconds: 3));
+        } on TimeoutException {
+          // Some vendor SDK versions stop their native scanner but never
+          // complete the Dart method call. Connecting is safe after the short
+          // grace period and must not remain stuck on the add-device page.
+        }
       } else {
         deviceMachine.transition(DeviceConnectionState.connecting);
       }
@@ -354,6 +367,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _syncInitialDeviceData(String deviceId) async {
+    if (connectedDevice?.id != deviceId || _disposed) return;
     final isCurrent = await _syncDeviceData(deviceId, initial: true);
     if (!isCurrent) return;
     unawaited(refreshSportRecords());
@@ -388,7 +402,7 @@ class AppController extends ChangeNotifier {
       if (!_isDeviceSyncCurrent(generation, deviceId)) return false;
       await _healthStore.upsert(records);
       if (!_isDeviceSyncCurrent(generation, deviceId)) return false;
-      healthRecords = await _healthStore.recent();
+      await _refreshHealthRecordCache();
       if (!_isDeviceSyncCurrent(generation, deviceId)) return false;
       syncStatus = records.isEmpty ? '设备暂无新数据' : '已同步 ${records.length} 条';
       succeeded = true;
@@ -499,6 +513,12 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<List<HealthRecord>> loadHealthRecords({
+    required HealthMetric metric,
+    required DateTime start,
+    required DateTime end,
+  }) => _healthStore.range(metric: metric, start: start, end: end);
+
   void setUnits({String? distance, String? temperature}) {
     if (distance != null) distanceUnit = distance;
     if (temperature != null) temperatureUnit = temperature;
@@ -550,19 +570,40 @@ class AppController extends ChangeNotifier {
 
   Future<void> refreshSportRecords() async {
     await Future<void>.delayed(Duration.zero);
+    if (_disposed) return;
+    final localRecords = await _healthStore.localSportRecords();
     if (connectedDevice == null) {
-      sportRecords = const [];
+      sportRecords = localRecords;
       notifyListeners();
       return;
     }
+    sportRecords = localRecords;
     try {
-      sportRecords = await _wearable.readSportRecords();
+      final records = await _wearable.readSportRecords();
+      if (_disposed) return;
+      final byId = <String, SportRecord>{
+        for (final record in records) record.id: record,
+        for (final record in localRecords) record.id: record,
+      };
+      sportRecords = byId.values.toList()
+        ..sort(
+          (a, b) => (b.startedAt ?? DateTime(1970)).compareTo(
+            a.startedAt ?? DateTime(1970),
+          ),
+        );
     } on PlatformException catch (error) {
+      if (_disposed) return;
       errorMessage = _wearableErrorMessage(error, fallback: '读取运动记录失败');
     } catch (_) {
+      if (_disposed) return;
       errorMessage = '运动记录读取失败，请稍后重试';
     }
     notifyListeners();
+  }
+
+  Future<void> saveLocalSportRecord(SportRecord record) async {
+    await _healthStore.saveSportRecord(record);
+    await refreshSportRecords();
   }
 
   Future<void> refreshDeviceSettings() async {
@@ -754,17 +795,17 @@ class AppController extends ChangeNotifier {
   Future<void> synchronizeCloud() async {
     if (_syncing) return;
     if (session == null) {
-      syncStatus = '未登录，数据仅保存在本机';
+      cloudSyncStatus = '未登录，数据仅保存在本机';
       notifyListeners();
       return;
     }
     _syncing = true;
     try {
       final result = await _syncService.synchronizeNow();
-      syncStatus =
+      cloudSyncStatus =
           result.message ?? '已上传 ${result.uploaded} 条，拒绝 ${result.rejected} 条';
     } on ApiException catch (error) {
-      syncStatus = _apiErrorMessage(error, fallback: '数据同步失败，请稍后重试');
+      cloudSyncStatus = _apiErrorMessage(error, fallback: '数据上传失败，请稍后重试');
     } finally {
       _syncing = false;
       notifyListeners();
@@ -778,11 +819,75 @@ class AppController extends ChangeNotifier {
     }
     try {
       careMembers = await _api.getCareMembers();
+      careStatus = '已加载';
     } on ApiException catch (error) {
       errorMessage = _apiErrorMessage(error, fallback: '关爱数据暂时无法读取');
+      careStatus = error is FeatureNotConfiguredException ? '服务暂不可用' : '加载失败';
     }
     notifyListeners();
   }
+
+  Future<void> refreshCareInvitations() async {
+    if (session == null) {
+      careInvitations = const [];
+      notifyListeners();
+      return;
+    }
+    final careApi = _api is SaydianCareApi ? _api as SaydianCareApi : null;
+    if (careApi == null) {
+      careStatus = '服务暂不可用';
+      notifyListeners();
+      return;
+    }
+    try {
+      careInvitations = await careApi.getCareInvitations();
+      careStatus = '已加载';
+    } on ApiException catch (error) {
+      errorMessage = _apiErrorMessage(error, fallback: '关爱邀请暂时无法读取');
+      careStatus = '服务暂不可用';
+    }
+    notifyListeners();
+  }
+
+  Future<bool> respondCareInvitation({
+    required int id,
+    required bool accepted,
+  }) => _guard(() async {
+    final careApi = _api is SaydianCareApi ? _api as SaydianCareApi : null;
+    if (careApi == null) {
+      throw const FeatureNotConfiguredException('远程关爱接口暂未配置');
+    }
+    await careApi.respondCareInvitation(id: id, accepted: accepted);
+    await refreshCareInvitations();
+    await refreshCare();
+  });
+
+  Future<Set<String>> loadCareShareSettings({
+    required int memberId,
+    int type = 0,
+  }) async {
+    final careApi = _api is SaydianCareApi ? _api as SaydianCareApi : null;
+    if (careApi == null) {
+      throw const FeatureNotConfiguredException('共享设置接口暂未配置');
+    }
+    return careApi.getCareShareSettings(type: type, memberId: memberId);
+  }
+
+  Future<bool> saveCareShareSettings({
+    required int memberId,
+    required Set<String> settings,
+    int type = 0,
+  }) => _guard(() async {
+    final careApi = _api is SaydianCareApi ? _api as SaydianCareApi : null;
+    if (careApi == null) {
+      throw const FeatureNotConfiguredException('共享设置接口暂未配置');
+    }
+    await careApi.saveCareShareSettings(
+      type: type,
+      memberId: memberId,
+      settings: settings,
+    );
+  });
 
   Future<bool> addCare(String mobile) => _guard(() async {
     await _api.addCare(mobile);
@@ -1201,6 +1306,7 @@ class AppController extends ChangeNotifier {
       'DEVICE_SETTINGS_NOT_CONFIGURED' ||
       'SPORT_NOT_CONFIGURED' => '此功能暂时无法使用，请稍后再试',
       'CONNECT_FAILED' || 'CONNECTION_DROPPED' => '连接失败，请确认手表未连接其他手机后重试',
+      'YUCHENG_SYNC_TIMEOUT' => '数据同步超时，可稍后重试',
       'NETWORK_ERROR' || 'NETWORK_UNAVAILABLE' => '网络不可用，请检查后重试',
       _ => fallback,
     };
@@ -1236,6 +1342,8 @@ class AppController extends ChangeNotifier {
       if (current != null && current.id == _latestDeviceDetails?.id) {
         connectedDevice = _mergeDeviceDetails(current);
       }
+    } else if (event.type == 'reconnected') {
+      unawaited(_restoreReconnectedDevice(event.payload));
     } else if (event.type == 'syncProgress') {
       final deviceId = '${event.payload['deviceId'] ?? ''}';
       if (isDeviceSyncing && connectedDevice?.id == deviceId) {
@@ -1268,6 +1376,10 @@ class AppController extends ChangeNotifier {
         };
       }
     } else if (event.type == 'disconnected') {
+      // Some Veepoo devices briefly report a disconnect while replacing the
+      // scan connection with the authenticated connection. The pending
+      // connect future remains authoritative and will report a real failure.
+      if (deviceState == DeviceConnectionState.connecting) return;
       _invalidateDeviceSync();
       connectedDevice = null;
       _latestDeviceDetails = null;
@@ -1295,6 +1407,42 @@ class AppController extends ChangeNotifier {
       unawaited(refreshSportRecords());
     }
     notifyListeners();
+  }
+
+  Future<void> _restoreReconnectedDevice(Map<String, Object?> payload) async {
+    final device = DeviceInfo.fromMap(payload);
+    if (device.id.trim().isEmpty ||
+        deviceState != DeviceConnectionState.disconnected) {
+      return;
+    }
+    _latestDeviceDetails = device;
+    errorMessage = null;
+    try {
+      deviceMachine.transition(DeviceConnectionState.connecting);
+      connectedDevice = _mergeDeviceDetails(device);
+      deviceMachine.transition(DeviceConnectionState.authenticating);
+      capabilities = await _wearable.getCapabilities();
+      if (connectedDevice?.id != device.id) return;
+      deviceMachine.transition(DeviceConnectionState.syncing);
+      syncStatus = '设备已自动重连';
+      deviceMachine.transition(DeviceConnectionState.ready);
+      notifyListeners();
+      unawaited(_syncInitialDeviceData(device.id));
+    } on PlatformException catch (error) {
+      connectedDevice = null;
+      errorMessage = _wearableErrorMessage(error, fallback: '设备重连失败');
+      if (deviceState != DeviceConnectionState.error) {
+        deviceMachine.transition(DeviceConnectionState.error);
+      }
+      notifyListeners();
+    } catch (_) {
+      connectedDevice = null;
+      errorMessage = '设备重连失败，请重新连接';
+      if (deviceState != DeviceConnectionState.error) {
+        deviceMachine.transition(DeviceConnectionState.error);
+      }
+      notifyListeners();
+    }
   }
 
   void _upsertScannedDevice(DeviceInfo device) {
@@ -1330,12 +1478,23 @@ class AppController extends ChangeNotifier {
 
   Future<void> _saveWearableRecord(HealthRecord record) async {
     await _healthStore.upsert([record]);
-    healthRecords = await _healthStore.recent();
+    await _refreshHealthRecordCache();
     if (deviceState == DeviceConnectionState.measuring) {
       deviceMachine.transition(DeviceConnectionState.ready);
     }
     notifyListeners();
     unawaited(synchronizeCloud());
+  }
+
+  Future<void> _refreshHealthRecordCache() async {
+    final recent = await _healthStore.recent();
+    final latest = await _healthStore.latestForEachMetric();
+    final byId = <String, HealthRecord>{
+      for (final record in recent) record.id: record,
+      for (final record in latest) record.id: record,
+    };
+    healthRecords = byId.values.toList()
+      ..sort((a, b) => b.measuredAt.compareTo(a.measuredAt));
   }
 
   @override

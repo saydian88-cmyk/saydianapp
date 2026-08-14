@@ -39,6 +39,9 @@ import com.veepoo.protocol.listener.base.INotifyResponse
 import com.veepoo.protocol.listener.data.IAutoMeasureSettingDataListener
 import com.veepoo.protocol.listener.data.IAlarm2DataListListener
 import com.veepoo.protocol.listener.data.IBPDetectDataListener
+import com.veepoo.protocol.listener.data.IBloodComponentDetectListener
+import com.veepoo.protocol.listener.data.IBloodGlucoseChangeListener
+import com.veepoo.protocol.listener.data.IBodyComponentDetectListener
 import com.veepoo.protocol.listener.data.ICameraDataListener
 import com.veepoo.protocol.listener.data.IContactOptListener
 import com.veepoo.protocol.listener.data.ICustomSettingDataListener
@@ -47,6 +50,7 @@ import com.veepoo.protocol.listener.data.IDeviceFuctionDataListener
 import com.veepoo.protocol.listener.data.IFindDevicelistener
 import com.veepoo.protocol.listener.data.IFunSwitchListener
 import com.veepoo.protocol.listener.data.IHeartDataListener
+import com.veepoo.protocol.listener.data.IECGDetectListener
 import com.veepoo.protocol.listener.data.IHealthAlarmIntervalListener
 import com.veepoo.protocol.listener.data.ILongSeatDataListener
 import com.veepoo.protocol.listener.data.IMtuChangeListener
@@ -68,8 +72,14 @@ import com.veepoo.protocol.listener.data.IWeatherStatusDataListener
 import com.veepoo.protocol.listener.data.IWorldClockOptListener
 import com.veepoo.protocol.model.datas.BTInfo
 import com.veepoo.protocol.model.datas.BpData
+import com.veepoo.protocol.model.datas.BloodComponent
+import com.veepoo.protocol.model.datas.BodyComponent
 import com.veepoo.protocol.model.datas.AutoMeasureData
 import com.veepoo.protocol.model.datas.Contact
+import com.veepoo.protocol.model.datas.EcgDetectInfo
+import com.veepoo.protocol.model.datas.EcgDetectResult
+import com.veepoo.protocol.model.datas.EcgDetectState
+import com.veepoo.protocol.model.datas.EcgDiagnosis
 import com.veepoo.protocol.model.datas.DeviceFunctionPackage1
 import com.veepoo.protocol.model.datas.DeviceFunctionPackage2
 import com.veepoo.protocol.model.datas.DeviceFunctionPackage3
@@ -102,6 +112,10 @@ import com.veepoo.protocol.model.datas.weather.WeatherData
 import com.veepoo.protocol.model.datas.weather.WeatherEvery3Hour
 import com.veepoo.protocol.model.datas.weather.WeatherEveryDay
 import com.veepoo.protocol.model.enums.EBPDetectModel
+import com.veepoo.protocol.model.enums.EBloodComponentDetectState
+import com.veepoo.protocol.model.enums.EBloodGlucoseRiskLevel
+import com.veepoo.protocol.model.enums.EBloodGlucoseStatus
+import com.veepoo.protocol.model.enums.DetectState
 import com.veepoo.protocol.model.enums.EAutoMeasureType
 import com.veepoo.protocol.model.enums.ECameraStatus
 import com.veepoo.protocol.model.enums.EContactOpt
@@ -3232,7 +3246,12 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                             records +=
                                 record(
                                     "sleep",
-                                    mapOf("value" to sleep.allSleepTime / 60.0),
+                                    mapOf(
+                                        "value" to sleep.allSleepTime / 60.0,
+                                        "deepHours" to sleep.deepSleepTime / 60.0,
+                                        "lightHours" to sleep.lowSleepTime / 60.0,
+                                        "wakeCount" to sleep.wakeCount,
+                                    ),
                                     "h",
                                     sleepRecordDate(day, sleep),
                                 )
@@ -3314,9 +3333,33 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                         }
                     }
 
-                    override fun onOriginHRVOriginListDataChange(items: MutableList<HRVOriginData>) = Unit
+                    override fun onOriginHRVOriginListDataChange(items: MutableList<HRVOriginData>) {
+                        connectionHandler.post {
+                            if (!isHealthSyncActive(generation, callback, deviceId)) return@post
+                            items.forEach { origin ->
+                                if (origin.hrvValue > 0) {
+                                    val at = origin.getmTime()?.toCalendar()?.time
+                                        ?: parseOriginTime(origin.date, origin.getmTime()?.clock)
+                                    records += record("hrv", mapOf("value" to origin.hrvValue), "ms", at)
+                                }
+                            }
+                            armHealthSyncTimeout(generation, callback, deviceId, "HRV数据")
+                        }
+                    }
 
-                    override fun onOriginSpo2OriginListDataChange(items: MutableList<Spo2hOriginData>) = Unit
+                    override fun onOriginSpo2OriginListDataChange(items: MutableList<Spo2hOriginData>) {
+                        connectionHandler.post {
+                            if (!isHealthSyncActive(generation, callback, deviceId)) return@post
+                            items.forEach { origin ->
+                                if (origin.oxygenValue > 0) {
+                                    val at = origin.getmTime()?.toCalendar()?.time
+                                        ?: parseOriginTime(origin.date, origin.getmTime()?.clock)
+                                    records += record("blood_oxygen", mapOf("value" to origin.oxygenValue), "%", at)
+                                }
+                            }
+                            armHealthSyncTimeout(generation, callback, deviceId, "血氧数据")
+                        }
+                    }
 
                     override fun onReadOriginProgressDetail(
                         day: Int,
@@ -3435,6 +3478,26 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                     "%",
                     at,
                 )
+        }
+        if (origin.bloodGlucose > 0) {
+            records += record(
+                "blood_glucose",
+                mapOf("value" to origin.bloodGlucose),
+                "mmol/L",
+                at,
+            )
+        }
+        origin.bloodComponent?.let { component ->
+            val values = buildMap<String, Number> {
+                if (component.uricAcid > 0) put("uricAcid", component.uricAcid)
+                if (component.tCHO > 0) put("totalCholesterol", component.tCHO)
+                if (component.tAG > 0) put("triglycerides", component.tAG)
+                if (component.hDL > 0) put("highDensityLipoprotein", component.hDL)
+                if (component.lDL > 0) put("lowDensityLipoprotein", component.lDL)
+            }
+            if (values.isNotEmpty()) {
+                records += record("blood_composition", values, "", at)
+            }
         }
     }
 
@@ -3650,6 +3713,13 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             "blood_pressure" -> manager.startDetectBP(measurementWrite(callback), IBPDetectDataListener(::onBloodPressureData), EBPDetectModel.DETECT_MODEL_PUBLIC)
             "blood_oxygen" -> manager.startDetectSPO2H(measurementWrite(callback), ISpo2hDataListener(::onOxygenData))
             "body_temperature" -> manager.startDetectTempture(measurementWrite(callback), ITemptureDetectDataListener(::onTemperatureData))
+            "blood_glucose" -> manager.startBloodGlucoseDetect(measurementWrite(callback), bloodGlucoseListener)
+            "body_composition" -> manager.startDetectBodyComponent(measurementWrite(callback), bodyComponentListener)
+            "blood_composition" -> manager.startDetectBloodComponent(measurementWrite(callback), false, bloodComponentListener)
+            "ecg" -> {
+                activeEcgSamples.clear()
+                manager.startDetectECG(measurementWrite(callback), true, ecgListener)
+            }
             else -> callback.error("MEASUREMENT_NOT_AVAILABLE", "该指标仅支持同步手表历史数据")
         }
     }
@@ -3661,6 +3731,10 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             "blood_pressure" -> manager.stopDetectBP(response, EBPDetectModel.DETECT_MODEL_PUBLIC)
             "blood_oxygen" -> manager.stopDetectSPO2H(response, ISpo2hDataListener { })
             "body_temperature" -> manager.stopDetectTempture(response, ITemptureDetectDataListener { })
+            "blood_glucose" -> manager.stopBloodGlucoseDetect(response, bloodGlucoseListener)
+            "body_composition" -> manager.stopDetectBodyComponent(response)
+            "blood_composition" -> manager.stopDetectBloodComponent(response)
+            "ecg" -> manager.stopDetectECG(response, true, ecgListener)
             else -> callback.error("MEASUREMENT_NOT_AVAILABLE", "该指标没有可停止的实时测量")
         }
         activeMetric = null
@@ -3683,6 +3757,110 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     private fun onTemperatureData(data: TemptureDetectData) {
         if (data.tempture > 0) emitRecord(record("body_temperature", mapOf("value" to data.tempture), "℃", Date()))
     }
+
+    private val bloodGlucoseListener =
+        object : IBloodGlucoseChangeListener {
+            override fun onDetectError(progress: Int, status: EBloodGlucoseStatus) {
+                emit("error", mapOf("code" to "GLUCOSE_MEASUREMENT_FAILED", "message" to "血糖测量未完成"))
+            }
+
+            override fun onBloodGlucoseDetect(progress: Int, value: Float, risk: EBloodGlucoseRiskLevel) {
+                if (value > 0) emitRecord(record("blood_glucose", mapOf("value" to value), "mmol/L", Date()))
+            }
+
+            override fun onBloodGlucoseStopDetect() = Unit
+            override fun onBloodGlucoseAdjustingSettingSuccess(open: Boolean, value: Float) = Unit
+            override fun onBloodGlucoseAdjustingSettingFailed() = Unit
+            override fun onBloodGlucoseAdjustingReadSuccess(open: Boolean, value: Float) = Unit
+            override fun onBloodGlucoseAdjustingReadFailed() = Unit
+            override fun onBGMultipleAdjustingReadSuccess(
+                open: Boolean,
+                first: com.veepoo.protocol.model.datas.MealInfo,
+                second: com.veepoo.protocol.model.datas.MealInfo,
+                third: com.veepoo.protocol.model.datas.MealInfo,
+            ) = Unit
+
+            override fun onBGMultipleAdjustingReadFailed() = Unit
+            override fun onBGMultipleAdjustingSettingSuccess() = Unit
+            override fun onBGMultipleAdjustingSettingFailed() = Unit
+        }
+
+    private val bodyComponentListener =
+        object : IBodyComponentDetectListener {
+            override fun onDetecting(progress: Int, lead: Int) = Unit
+
+            override fun onDetectSuccess(data: BodyComponent) {
+                val values = bodyComponentValues(data)
+                if (values.isNotEmpty()) emitRecord(record("body_composition", values, "", Date()))
+            }
+
+            override fun onDetectFailed(state: DetectState) {
+                emit("error", mapOf("code" to "BODY_COMPOSITION_FAILED", "message" to "身体成分测量未完成"))
+            }
+
+            override fun onDetectStop() = Unit
+        }
+
+    private val bloodComponentListener =
+        object : IBloodComponentDetectListener {
+            override fun onDetectFailed(state: EBloodComponentDetectState) {
+                emit("error", mapOf("code" to "BLOOD_COMPONENT_FAILED", "message" to "血液成分测量未完成"))
+            }
+
+            override fun onDetecting(progress: Int, data: BloodComponent) = Unit
+            override fun onDetectStop() = Unit
+
+            override fun onDetectComplete(data: BloodComponent) {
+                val values = bloodComponentValues(data)
+                if (values.isNotEmpty()) emitRecord(record("blood_composition", values, "", Date()))
+            }
+        }
+
+    private val activeEcgSamples = mutableListOf<Number>()
+    private val ecgListener =
+        object : IECGDetectListener {
+            override fun onEcgDetectInfoChange(info: EcgDetectInfo) = Unit
+            override fun onEcgDetectStateChange(state: EcgDetectState) = Unit
+
+            override fun onEcgDetectResultChange(result: EcgDetectResult) {
+                if (!result.isSuccess) return
+                val values = buildMap<String, Number> {
+                    if (result.aveHeart > 0) put("meanHeartRate", result.aveHeart)
+                    if (result.aveHrv > 0) put("averageHRV", result.aveHrv)
+                    if (result.aveQT > 0) put("averageTimeInterval", result.aveQT)
+                }
+                if (values.isNotEmpty()) {
+                    val samples = result.filterSignals?.toList().orEmpty().ifEmpty { activeEcgSamples }
+                    emitRecord(record("ecg", values, "", Date(), samples))
+                }
+            }
+
+            override fun onEcgDetectDiagnosisChange(diagnosis: EcgDiagnosis) = Unit
+
+            override fun onEcgADCChange(origin: IntArray, filtered: IntArray) {
+                activeEcgSamples += (if (filtered.isNotEmpty()) filtered else origin).toList()
+            }
+        }
+
+    private fun bodyComponentValues(data: BodyComponent): Map<String, Number> =
+        buildMap {
+            if (data.BMI > 0) put("BMI", data.BMI)
+            if (data.bodyFatRate > 0) put("bodyFatPercentage", data.bodyFatRate)
+            if (data.fatRate > 0) put("fatMass", data.fatRate)
+            if (data.muscleMass > 0) put("muscleMass", data.muscleMass)
+            if (data.bodyWater > 0) put("bodyMoisture", data.bodyWater)
+            if (data.boneMass > 0) put("boneMass", data.boneMass)
+            if (data.basalMetabolicRate > 0) put("basalMetabolism", data.basalMetabolicRate)
+        }
+
+    private fun bloodComponentValues(data: BloodComponent): Map<String, Number> =
+        buildMap {
+            if (data.uricAcid > 0) put("uricAcid", data.uricAcid)
+            if (data.tCHO > 0) put("totalCholesterol", data.tCHO)
+            if (data.tAG > 0) put("triglycerides", data.tAG)
+            if (data.hDL > 0) put("highDensityLipoprotein", data.hDL)
+            if (data.lDL > 0) put("lowDensityLipoprotein", data.lDL)
+        }
 
     private fun measurementWrite(callback: ResultCallback<Unit>) =
         IBleWriteResponse { code ->
@@ -3729,9 +3907,17 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         return Unit
     }
 
-    private fun record(type: String, values: Map<String, Number>, unit: String, measuredAt: Date): Map<String, Any?> {
+    private fun record(
+        type: String,
+        values: Map<String, Number>,
+        unit: String,
+        measuredAt: Date,
+        samples: List<Number> = emptyList(),
+    ): Map<String, Any?> {
         val timestamp = iso8601(measuredAt)
-        return mapOf(
+        return buildMap(
+        ) {
+            putAll(mapOf(
             "id" to "$connectedDeviceId:$type:$timestamp",
             "type" to type,
             "values" to values,
@@ -3743,7 +3929,9 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             "quality" to "device_reported",
             "source" to "wearable",
             "rawVersion" to 1,
-        )
+            ))
+            if (samples.isNotEmpty()) put("samples", samples)
+        }
     }
 
     private fun emitRecord(record: Map<String, Any?>) {

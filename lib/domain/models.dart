@@ -67,6 +67,7 @@ class SportRecord {
     required this.durationSeconds,
     required this.distanceKm,
     required this.calories,
+    this.routePoints = const [],
   });
 
   final String id;
@@ -75,6 +76,7 @@ class SportRecord {
   final int durationSeconds;
   final double distanceKm;
   final double calories;
+  final List<SportRoutePoint> routePoints;
 
   factory SportRecord.fromMap(Map<Object?, Object?> map) => SportRecord(
     id: '${map['id'] ?? ''}',
@@ -83,7 +85,52 @@ class SportRecord {
     durationSeconds: (map['durationSeconds'] as num?)?.toInt() ?? 0,
     distanceKm: (map['distanceKm'] as num?)?.toDouble() ?? 0,
     calories: (map['calories'] as num?)?.toDouble() ?? 0,
+    routePoints: map['routePoints'] is List
+        ? (map['routePoints'] as List)
+              .whereType<Map>()
+              .map(SportRoutePoint.fromMap)
+              .toList()
+        : const [],
   );
+
+  Map<String, Object?> toMap() => {
+    'id': id,
+    'mode': mode.wireName,
+    'startedAt': startedAt?.toUtc().toIso8601String(),
+    'durationSeconds': durationSeconds,
+    'distanceKm': distanceKm,
+    'calories': calories,
+    'routePoints': routePoints.map((point) => point.toMap()).toList(),
+  };
+}
+
+class SportRoutePoint {
+  const SportRoutePoint({
+    required this.latitude,
+    required this.longitude,
+    required this.recordedAt,
+    this.accuracy,
+  });
+
+  final double latitude;
+  final double longitude;
+  final DateTime recordedAt;
+  final double? accuracy;
+
+  factory SportRoutePoint.fromMap(Map<Object?, Object?> map) => SportRoutePoint(
+    latitude: (map['latitude'] as num?)?.toDouble() ?? 0,
+    longitude: (map['longitude'] as num?)?.toDouble() ?? 0,
+    recordedAt:
+        DateTime.tryParse('${map['recordedAt'] ?? ''}') ?? DateTime.now(),
+    accuracy: (map['accuracy'] as num?)?.toDouble(),
+  );
+
+  Map<String, Object?> toMap() => {
+    'latitude': latitude,
+    'longitude': longitude,
+    'recordedAt': recordedAt.toUtc().toIso8601String(),
+    'accuracy': accuracy,
+  };
 }
 
 class DeviceInfo {
@@ -124,6 +171,32 @@ class DeviceInfo {
     'rssi': rssi,
     'lastSyncAt': lastSyncAt?.toUtc().toIso8601String(),
   };
+
+  WearableSdkSource get sdkSource => WearableSdkSource.fromDeviceId(id);
+
+  String get nativeId {
+    final source = sdkSource;
+    if (source == WearableSdkSource.unknown) return id;
+    return id.substring(id.indexOf(':') + 1);
+  }
+}
+
+enum WearableSdkSource {
+  veepoo('Vep', 'Veepoo'),
+  yucheng('Yuc', 'Yucheng'),
+  unknown('--', '未标识');
+
+  const WearableSdkSource(this.shortLabel, this.fullLabel);
+
+  final String shortLabel;
+  final String fullLabel;
+
+  static WearableSdkSource fromDeviceId(String deviceId) {
+    final normalized = deviceId.trim().toLowerCase();
+    if (normalized.startsWith('veepoo:')) return WearableSdkSource.veepoo;
+    if (normalized.startsWith('yucheng:')) return WearableSdkSource.yucheng;
+    return WearableSdkSource.unknown;
+  }
 }
 
 class WearableUserProfile {
@@ -255,6 +328,7 @@ class HealthRecord {
     required this.quality,
     required this.source,
     required this.rawVersion,
+    this.samples = const [],
   });
 
   final String id;
@@ -268,6 +342,7 @@ class HealthRecord {
   final String quality;
   final MeasurementSource source;
   final int rawVersion;
+  final List<num> samples;
 
   factory HealthRecord.fromJson(Map<String, Object?> json) {
     final rawValues = json['values'];
@@ -291,6 +366,9 @@ class HealthRecord {
         orElse: () => MeasurementSource.wearable,
       ),
       rawVersion: (json['rawVersion'] as num?)?.toInt() ?? 1,
+      samples: json['samples'] is List
+          ? (json['samples'] as List).whereType<num>().toList()
+          : const [],
     );
   }
 
@@ -306,6 +384,7 @@ class HealthRecord {
     'quality': quality,
     'source': source.name,
     'rawVersion': rawVersion,
+    if (samples.isNotEmpty) 'samples': samples,
   };
 
   String get displayValue {

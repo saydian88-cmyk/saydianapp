@@ -77,6 +77,74 @@ void main() {
     expect(() => api.addCare('abc'), throwsA(isA<ApiException>()));
   });
 
+  test('business error code is preserved when HTTP status is 200', () async {
+    final client = MockClient(
+      (_) async => http.Response(
+        '{"code":401,"message":"Unauthorized","data":{}}',
+        200,
+        headers: {'content-type': 'application/json'},
+      ),
+    );
+    final api = SaydianApiClient(
+      _authenticatedVault(),
+      client: client,
+      baseUri: Uri.parse('https://example.invalid'),
+    );
+
+    await expectLater(
+      api.getCareMembers(),
+      throwsA(
+        isA<ApiException>()
+            .having((error) => error.statusCode, 'statusCode', 401)
+            .having((error) => error.code, 'code', 401),
+      ),
+    );
+  });
+
+  test(
+    'missing health batch endpoint is reported as not configured when HTTP is 200',
+    () async {
+      final client = MockClient((request) async {
+        expect(request.method, 'POST');
+        expect(request.url.path, '/api/v1/member/health-records/batch');
+        return http.Response(
+          '{"code":404,"message":"页面未找到。","data":{}}',
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      });
+      final api = SaydianApiClient(
+        _authenticatedVault(),
+        client: client,
+        baseUri: Uri.parse('https://example.invalid'),
+      );
+      final record = HealthRecord(
+        id: 'record-1',
+        metric: HealthMetric.heartRate,
+        values: const {'value': 72},
+        unit: 'bpm',
+        measuredAt: DateTime.utc(2026, 8, 13),
+        timezone: '+08:00',
+        deviceId: 'ET488',
+        firmwareVersion: '1.0.0',
+        quality: 'good',
+        source: MeasurementSource.wearable,
+        rawVersion: 1,
+      );
+
+      await expectLater(
+        api.uploadHealthBatch(SyncBatch(cursor: null, records: [record])),
+        throwsA(
+          isA<FeatureNotConfiguredException>().having(
+            (error) => error.message,
+            'message',
+            '批量健康同步接口未配置',
+          ),
+        ),
+      );
+    },
+  );
+
   test('health encyclopedia uses the mini-program public endpoint', () async {
     final client = MockClient((request) async {
       expect(request.method, 'GET');
@@ -96,6 +164,26 @@ void main() {
     final articles = await api.getArticles();
 
     expect(articles.single['id'], 3);
+  });
+
+  test('network failures are normalized to an offline ApiException', () async {
+    final api = SaydianApiClient(
+      MemorySessionVault(),
+      client: MockClient(
+        (request) async =>
+            throw http.ClientException('Failed host lookup', request.url),
+      ),
+      baseUri: Uri.parse('https://example.invalid'),
+    );
+
+    await expectLater(
+      api.getArticles(),
+      throwsA(
+        isA<ApiException>()
+            .having((error) => error.code, 'code', 'NETWORK_UNAVAILABLE')
+            .having((error) => error.message, 'message', '网络连接失败，请检查网络后重试'),
+      ),
+    );
   });
 
   test('privacy agreement uses the single-article endpoint', () async {
@@ -305,6 +393,69 @@ void main() {
     );
 
     await api.saveActivityGoals(steps: 10000, distance: 6.5, calories: 800);
+  });
+
+  test('care invitation response uses the prototype status contract', () async {
+    final client = MockClient((request) async {
+      expect(request.method, 'POST');
+      expect(request.url.path, '/api/v1/member/care/save');
+      expect(request.body, contains('name="id"'));
+      expect(request.body, contains('19'));
+      expect(request.body, contains('name="examine_status"'));
+      expect(request.body, contains('2'));
+      return http.Response('{"code":200,"data":{}}', 200);
+    });
+    final api = SaydianApiClient(
+      _authenticatedVault(),
+      client: client,
+      baseUri: Uri.parse('https://example.invalid'),
+    );
+
+    await api.respondCareInvitation(id: 19, accepted: false);
+  });
+
+  test('care share settings decode the server JSON list', () async {
+    final client = MockClient((request) async {
+      expect(request.method, 'GET');
+      expect(request.url.path, '/api/v1/member/care-setting/preview');
+      expect(request.url.queryParameters, {'type': '2', 'to_member_id': '7'});
+      return http.Response(
+        '{"code":200,"data":{"setting":"[\\"heart_rate\\",\\"sleep\\"]"}}',
+        200,
+      );
+    });
+    final api = SaydianApiClient(
+      _authenticatedVault(),
+      client: client,
+      baseUri: Uri.parse('https://example.invalid'),
+    );
+
+    expect(await api.getCareShareSettings(type: 2, memberId: 7), {
+      'heart_rate',
+      'sleep',
+    });
+  });
+
+  test('care share settings save a stable sorted JSON list', () async {
+    final client = MockClient((request) async {
+      expect(request.method, 'POST');
+      expect(request.url.path, '/api/v1/member/care-setting');
+      expect(request.body, contains('name="type"'));
+      expect(request.body, contains('name="to_member_id"'));
+      expect(request.body, contains('["heart_rate","sleep"]'));
+      return http.Response('{"code":200,"data":{}}', 200);
+    });
+    final api = SaydianApiClient(
+      _authenticatedVault(),
+      client: client,
+      baseUri: Uri.parse('https://example.invalid'),
+    );
+
+    await api.saveCareShareSettings(
+      type: 2,
+      memberId: 7,
+      settings: {'sleep', 'heart_rate'},
+    );
   });
 }
 

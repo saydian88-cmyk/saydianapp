@@ -29,7 +29,6 @@ target 'Runner' do
   use_frameworks!
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 
-  pod 'FMDB', '2.6.2'
   pod 'MJExtension', '3.0.15.1'
 
   target 'RunnerTests' do
@@ -43,5 +42,15 @@ post_install do |installer|
     target.build_configurations.each do |config|
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
     end
+  end
+
+  # Yucheng's JLDialUnit already contains the ZipZap Objective-C classes.
+  # Linking the standalone static ZipZap framework as well creates duplicate
+  # runtime classes, so strip only that redundant linker flag from generated
+  # CocoaPods xcconfigs. The vendor source remains untouched.
+  Dir.glob(File.join(__dir__, 'Pods', 'Target Support Files', '**', '*.xcconfig')).each do |path|
+    contents = File.read(path)
+    updated = contents.gsub(/\s-framework "ZipZap"/, '')
+    File.write(path, updated) if updated != contents
   end
 end

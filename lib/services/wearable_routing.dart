@@ -8,17 +8,23 @@ import 'wearable_bridge.dart';
 
 enum WearableTransport { veepoo, yucheng }
 
-class W8DeviceClassifier {
-  const W8DeviceClassifier._();
+class YuchengDeviceClassifier {
+  const YuchengDeviceClassifier._();
 
-  static const _models = {'W8', 'W8S', 'W8PRO', 'W8ULTRA', 'W8ULTRAR'};
+  static const _models = ['W8ULTRAR', 'W8ULTRA', 'W8PRO', 'W8S', 'W8'];
 
   static bool matches(String name) {
     final normalized = name.toUpperCase().replaceAll(
       RegExp(r'[\s\-‐‑‒–—]'),
       '',
     );
-    return _models.contains(normalized);
+    for (final model in _models) {
+      if (normalized == model) return true;
+      if (!normalized.startsWith(model)) continue;
+      final suffix = normalized.substring(model.length);
+      if (RegExp(r'^[0-9A-F]{4,6}$').hasMatch(suffix)) return true;
+    }
+    return false;
   }
 }
 
@@ -111,14 +117,23 @@ class RoutedWearableBridge implements WearableBridge {
       _sources[WearableTransport.veepoo]!.scanDevices(),
       _sources[WearableTransport.yucheng]!.scanDevices(),
     ]);
-    final candidates = <RoutedDevice>[
-      ...results[0].map(
-        (device) => RoutedDevice.fromDevice(WearableTransport.veepoo, device),
-      ),
-      ...results[1].map(
-        (device) => RoutedDevice.fromDevice(WearableTransport.yucheng, device),
-      ),
-    ];
+    final candidates =
+        <RoutedDevice>[
+          ...results[0].map(
+            (device) =>
+                RoutedDevice.fromDevice(WearableTransport.veepoo, device),
+          ),
+          ...results[1].map(
+            (device) =>
+                RoutedDevice.fromDevice(WearableTransport.yucheng, device),
+          ),
+        ].where((candidate) {
+          // Yucheng-family devices must use Yucheng. The two native SDKs expose
+          // different identifiers for the same watch, so filtering here avoids a
+          // duplicate Veepoo entry even when identifier-based grouping cannot.
+          return candidate.transport == WearableTransport.yucheng ||
+              !YuchengDeviceClassifier.matches(candidate.display.name);
+        }).toList();
     final grouped = <String, List<RoutedDevice>>{};
     for (final candidate in candidates) {
       grouped.putIfAbsent(candidate.nativeIdentifier, () => []).add(candidate);
@@ -133,13 +148,13 @@ class RoutedWearableBridge implements WearableBridge {
   }
 
   RoutedDevice? _selectDevice(List<RoutedDevice> candidates) {
-    final hasW8 = candidates.any(
-      (candidate) => W8DeviceClassifier.matches(candidate.display.name),
+    final hasYuchengModel = candidates.any(
+      (candidate) => YuchengDeviceClassifier.matches(candidate.display.name),
     );
-    if (hasW8) {
+    if (hasYuchengModel) {
       for (final candidate in candidates) {
         if (candidate.transport == WearableTransport.yucheng &&
-            W8DeviceClassifier.matches(candidate.display.name)) {
+            YuchengDeviceClassifier.matches(candidate.display.name)) {
           return candidate;
         }
       }
@@ -173,10 +188,10 @@ class RoutedWearableBridge implements WearableBridge {
       );
     }
     if (device.transport == WearableTransport.veepoo &&
-        W8DeviceClassifier.matches(device.display.name)) {
+        YuchengDeviceClassifier.matches(device.display.name)) {
       throw PlatformException(
         code: 'YUCHENG_DISCOVERY_MISMATCH',
-        message: 'W8 设备未被云创 SDK 识别，请重新扫描后重试',
+        message: 'Yuc 设备未被云创 SDK 识别，请重新扫描后重试',
       );
     }
 
@@ -279,6 +294,13 @@ class RoutedWearableBridge implements WearableBridge {
   void _forwardEvent(WearableTransport transport, WearableEvent event) {
     if (event.type == 'scanDevice') {
       final device = DeviceInfo.fromMap(event.payload);
+      // Both Android SDKs can report the same W8-family watch while scanning.
+      // W8 devices are owned by Yucheng, so never expose the Veepoo discovery
+      // event to the controller (the completed scan is filtered the same way).
+      if (transport == WearableTransport.veepoo &&
+          YuchengDeviceClassifier.matches(device.name)) {
+        return;
+      }
       final routed = RoutedDevice.fromDevice(transport, device);
       _eventController.add(
         WearableEvent(type: event.type, payload: routed.display.toJson()),

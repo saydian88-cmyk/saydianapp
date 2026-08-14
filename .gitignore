@@ -62,6 +62,7 @@ app.*.map.json
 /android/app/libs/*.jar
 /ios/Runner/Vendor/*.framework/
 /ios/Runner/Vendor/*.xcframework/
+/ios/Flutter/Local.xcconfig
 
 # Local reference material; keep it on this machine, not in source control.
 /相关信息.txt

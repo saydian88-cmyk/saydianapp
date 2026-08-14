@@ -1,0 +1,72 @@
+group 'com.example.yc_product_plugin'
+version '1.0'
+
+def yuchengPluginSource = gradle.ext.yuchengPluginSource
+def yuchengAndroidSource = file(yuchengPluginSource + '/android')
+def yuchengLibs = file(yuchengPluginSource + '/android/libs')
+
+repositories {
+    maven { url 'https://maven.aliyun.com/repository/public/' }
+    maven { url 'https://maven.aliyun.com/repository/google/' }
+    google()
+    mavenCentral()
+    flatDir { dirs yuchengLibs }
+}
+
+apply plugin: 'com.android.library'
+
+android {
+    namespace 'com.example.yc_product_plugin'
+    compileSdk 35
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        minSdk 26
+        ndk {
+            abiFilters 'armeabi', 'armeabi-v7a', 'arm64-v8a'
+        }
+    }
+
+    buildTypes {
+        release {
+            debuggable false
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile file(yuchengAndroidSource.path + '/src/main/AndroidManifest.xml')
+            java.srcDirs = [file(yuchengAndroidSource.path + '/src/main/java')]
+            jniLibs.srcDirs = [yuchengLibs]
+        }
+    }
+}
+
+dependencies {
+    // Named flat-dir coordinates keep the vendor AARs on the app's runtime
+    // classpath without triggering AGP's broken-local-AAR guard for libraries.
+    api(name: 'AliAgent-release-4.2.1', ext: 'aar')
+    api(name: 'BmpConvert_V1.6.0_10604-release', ext: 'aar')
+    api(name: 'jl_bluetooth_connect_V1.3.2-release', ext: 'aar')
+    api(name: 'jl_bt_ota_V1.10.0_10932-release', ext: 'aar')
+    api(name: 'jl_rcsp_V0.7.2_527-release', ext: 'aar')
+    api(name: 'JL_Watch_V1.13.1_11214-release', ext: 'aar')
+    api(name: 'ycbtsdk-release', ext: 'aar')
+    api fileTree(dir: yuchengLibs, include: ['*.jar'])
+    api(platform('org.jetbrains.kotlin:kotlin-bom:1.8.0'))
+    api 'no.nordicsemi.android:dfu:2.4.0'
+    api 'com.google.code.gson:gson:2.8.6'
+    api 'com.squareup.okhttp3:okhttp:4.4.0'
+    api 'org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.1.0'
+    // The SDK's legacy dialog dependency is Jetified at build time.  Pin its
+    // AndroidX replacement above the obsolete 1.0.0 namespace artifacts.
+    api 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.lai.weavey:dialog:2.0.1'
+}

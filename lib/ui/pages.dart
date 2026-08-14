@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -10,6 +12,8 @@ import '../domain/models.dart';
 import '../services/app_controller.dart';
 import 'app_theme.dart';
 import 'brand_assets.dart';
+import 'device_sdk_badge.dart';
+import 'health_trend_page.dart';
 import 'prototype_pages.dart';
 import 'shop_pages.dart';
 
@@ -362,13 +366,18 @@ class DashboardPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final latest = controller.latestByMetric;
     final metrics = [
-      HealthMetric.steps,
-      HealthMetric.sleep,
-      HealthMetric.heartRate,
-      HealthMetric.bloodOxygen,
       HealthMetric.bloodPressure,
+      HealthMetric.bloodGlucose,
+      HealthMetric.bloodOxygen,
       HealthMetric.bodyTemperature,
+      HealthMetric.ecg,
+      HealthMetric.heartRate,
+      HealthMetric.hrv,
+      HealthMetric.bodyComposition,
+      HealthMetric.sleep,
+      HealthMetric.bloodComposition,
     ];
+    final textScale = MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 2.0);
     return SafeArea(
       bottom: false,
       child: RefreshIndicator(
@@ -429,9 +438,9 @@ class DashboardPage extends StatelessWidget {
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               itemCount: metrics.length,
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 2,
-                childAspectRatio: 1.06,
+                mainAxisExtent: 184 + (textScale - 1) * 36,
                 crossAxisSpacing: 12,
                 mainAxisSpacing: 12,
               ),
@@ -449,7 +458,7 @@ class DashboardPage extends StatelessWidget {
             const SizedBox(height: 14),
             _StatusCard(
               title: '数据同步',
-              message: controller.syncStatus,
+              message: controller.cloudSyncStatus,
               icon: Icons.cloud_done_outlined,
               action: IconButton(
                 onPressed: controller.synchronizeCloud,
@@ -848,13 +857,23 @@ class _DeviceHero extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  device?.name ?? '尚未连接手表',
-                  style: const TextStyle(
-                    color: SaydianColors.ink,
-                    fontSize: 19,
-                    fontWeight: FontWeight.w800,
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        device?.name ?? '尚未连接手表',
+                        style: const TextStyle(
+                          color: SaydianColors.ink,
+                          fontSize: 19,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    if (device != null) ...[
+                      const SizedBox(width: 8),
+                      DeviceSdkBadge(source: device.sdkSource, compact: true),
+                    ],
+                  ],
                 ),
                 const SizedBox(height: 6),
                 Text(
@@ -902,7 +921,12 @@ class _MetricCard extends StatelessWidget {
       HealthMetric.heartRate => Icons.favorite_outline,
       HealthMetric.bloodOxygen => Icons.water_drop_outlined,
       HealthMetric.bloodPressure => Icons.speed_outlined,
+      HealthMetric.bloodGlucose => Icons.bloodtype_outlined,
       HealthMetric.bodyTemperature => Icons.thermostat_outlined,
+      HealthMetric.ecg => Icons.monitor_heart_outlined,
+      HealthMetric.hrv => Icons.show_chart_rounded,
+      HealthMetric.bodyComposition => Icons.accessibility_new_rounded,
+      HealthMetric.bloodComposition => Icons.science_outlined,
       _ => Icons.monitor_heart_outlined,
     };
     final color = switch (metric) {
@@ -911,14 +935,20 @@ class _MetricCard extends StatelessWidget {
       HealthMetric.heartRate => SaydianColors.pink,
       HealthMetric.bloodOxygen => SaydianColors.blue,
       HealthMetric.bloodPressure => SaydianColors.orange,
+      HealthMetric.bloodGlucose => SaydianColors.green,
       HealthMetric.bodyTemperature => SaydianColors.cyan,
+      HealthMetric.ecg => const Color(0xFF6E8DF5),
+      HealthMetric.hrv => const Color(0xFF8C7CF0),
+      HealthMetric.bodyComposition => SaydianColors.cyan,
+      HealthMetric.bloodComposition => SaydianColors.pink,
       _ => SaydianColors.green,
     };
     return GestureDetector(
+      key: ValueKey('health-metric-${metric.name}'),
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) =>
-              HealthHistoryPage(controller: controller, metric: metric),
+              HealthTrendPage(controller: controller, metric: metric),
         ),
       ),
       child: Card(
@@ -939,32 +969,46 @@ class _MetricCard extends StatelessWidget {
                     child: Icon(icon, color: color, size: 19),
                   ),
                   const SizedBox(width: 8),
-                  Text(
-                    metric.label,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  Expanded(
+                    child: Text(
+                      metric.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
                   ),
                 ],
               ),
               const SizedBox(height: 14),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    _healthDisplayValue(record, controller),
-                    style: const TextStyle(
-                      fontSize: 23,
-                      fontWeight: FontWeight.w900,
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      _healthDisplayValue(record, controller),
+                      style: const TextStyle(
+                        fontSize: 23,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 6),
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 3),
-                    child: Text(
-                      _healthDisplayUnit(metric, record, controller),
-                      style: const TextStyle(color: Colors.black54),
+                    const SizedBox(width: 6),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 3),
+                      child: Text(
+                        _healthDisplayUnit(metric, record, controller),
+                        style: const TextStyle(color: Colors.black54),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              HealthMetricMiniChart(
+                controller: controller,
+                metric: metric,
+                color: color,
               ),
               const Spacer(),
               Text(
@@ -1110,9 +1154,17 @@ class HealthPage extends StatelessWidget {
                     HealthMetric.heartRate,
                     HealthMetric.bloodOxygen,
                     HealthMetric.bloodPressure,
+                    HealthMetric.bloodGlucose,
                     HealthMetric.bodyTemperature,
+                    HealthMetric.ecg,
+                    HealthMetric.bodyComposition,
+                    HealthMetric.bloodComposition,
                   }.contains(metric)
-                  ? () => controller.startMeasurement(metric)
+                  ? () => _showHealthMeasurementDialog(
+                      context,
+                      controller,
+                      metric,
+                    )
                   : null,
             ),
             const SizedBox(height: 10),
@@ -1157,6 +1209,101 @@ class HealthPage extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+Future<void> _showHealthMeasurementDialog(
+  BuildContext context,
+  AppController controller,
+  HealthMetric metric,
+) => showDialog<void>(
+  context: context,
+  barrierDismissible: false,
+  builder: (_) =>
+      _HealthMeasurementDialog(controller: controller, metric: metric),
+);
+
+class _HealthMeasurementDialog extends StatefulWidget {
+  const _HealthMeasurementDialog({
+    required this.controller,
+    required this.metric,
+  });
+
+  final AppController controller;
+  final HealthMetric metric;
+
+  @override
+  State<_HealthMeasurementDialog> createState() =>
+      _HealthMeasurementDialogState();
+}
+
+class _HealthMeasurementDialogState extends State<_HealthMeasurementDialog> {
+  late final DateTime _startedAt = DateTime.now();
+  bool _stopping = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(widget.controller.startMeasurement(widget.metric));
+  }
+
+  Future<void> _finish() async {
+    if (_stopping) return;
+    setState(() => _stopping = true);
+    await widget.controller.stopMeasurement(widget.metric);
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('${widget.metric.label}测量'),
+      content: ListenableBuilder(
+        listenable: widget.controller,
+        builder: (context, _) {
+          final record = widget.controller.latestByMetric[widget.metric];
+          final isNew = record != null && record.measuredAt.isAfter(_startedAt);
+          final failed =
+              widget.controller.deviceState == DeviceConnectionState.error;
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                isNew
+                    ? Icons.check_circle_rounded
+                    : Icons.monitor_heart_rounded,
+                color: isNew ? SaydianColors.green : SaydianColors.pink,
+                size: 54,
+              ),
+              const SizedBox(height: 14),
+              Text(
+                isNew
+                    ? '${_healthDisplayValue(record, widget.controller)} ${_healthDisplayUnit(widget.metric, record, widget.controller)}'
+                    : failed
+                    ? widget.controller.errorMessage ?? '测量未完成'
+                    : '请保持正确佩戴并静止，等待手表返回结果',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: isNew ? 24 : 14,
+                  fontWeight: isNew ? FontWeight.w900 : FontWeight.w500,
+                  height: 1.5,
+                ),
+              ),
+              if (!isNew && !failed) ...[
+                const SizedBox(height: 16),
+                const LinearProgressIndicator(),
+              ],
+            ],
+          );
+        },
+      ),
+      actions: [
+        TextButton(
+          onPressed: _stopping ? null : _finish,
+          child: Text(_stopping ? '正在停止' : '结束测量'),
+        ),
+      ],
     );
   }
 }
@@ -1287,27 +1434,108 @@ class SportSessionPage extends StatefulWidget {
 
 class _SportSessionPageState extends State<SportSessionPage> {
   Timer? _timer;
+  StreamSubscription<Position>? _positionSubscription;
   int _elapsedSeconds = 0;
+  DateTime? _startedAt;
+  final List<SportRoutePoint> _routePoints = [];
+  double _routeDistanceKm = 0;
+  String _locationStatus = '开始后可记录前台户外轨迹';
 
   @override
   void dispose() {
     _timer?.cancel();
+    unawaited(_positionSubscription?.cancel());
     super.dispose();
   }
 
   Future<void> _toggleSport() async {
     if (widget.controller.activeSport != null) {
+      final startedAt = _startedAt;
+      await _positionSubscription?.cancel();
+      _positionSubscription = null;
       await widget.controller.stopSport();
       _timer?.cancel();
+      if (startedAt != null && _elapsedSeconds > 0) {
+        await widget.controller.saveLocalSportRecord(
+          SportRecord(
+            id: 'local:${startedAt.toUtc().toIso8601String()}',
+            mode: widget.mode,
+            startedAt: startedAt,
+            durationSeconds: _elapsedSeconds,
+            distanceKm: _routeDistanceKm,
+            calories: 0,
+            routePoints: List.unmodifiable(_routePoints),
+          ),
+        );
+      }
       if (mounted) setState(() {});
       return;
     }
     final started = await widget.controller.startSport(widget.mode);
     if (!started || !mounted) return;
+    _startedAt = DateTime.now();
+    _elapsedSeconds = 0;
+    _routePoints.clear();
+    _routeDistanceKm = 0;
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _elapsedSeconds += 1);
+      if (mounted) {
+        setState(
+          () => _elapsedSeconds = DateTime.now()
+              .difference(_startedAt!)
+              .inSeconds,
+        );
+      }
     });
     setState(() {});
+    unawaited(_startLocationTracking());
+  }
+
+  Future<void> _startLocationTracking() async {
+    if (!await Geolocator.isLocationServiceEnabled()) {
+      if (mounted) setState(() => _locationStatus = '定位服务未开启，仍会记录手表运动数据');
+      return;
+    }
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      if (mounted) setState(() => _locationStatus = '未允许位置权限，仍会记录手表运动数据');
+      return;
+    }
+    if (mounted) setState(() => _locationStatus = '正在记录前台户外轨迹');
+    _positionSubscription =
+        Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 5,
+          ),
+        ).listen(
+          (position) {
+            if (position.accuracy > 80 || !mounted) return;
+            final point = SportRoutePoint(
+              latitude: position.latitude,
+              longitude: position.longitude,
+              recordedAt: position.timestamp,
+              accuracy: position.accuracy,
+            );
+            if (_routePoints.isNotEmpty) {
+              final previous = _routePoints.last;
+              final meters = Geolocator.distanceBetween(
+                previous.latitude,
+                previous.longitude,
+                point.latitude,
+                point.longitude,
+              );
+              if (meters < 500) _routeDistanceKm += meters / 1000;
+            }
+            setState(() => _routePoints.add(point));
+          },
+          onError: (_) {
+            if (mounted) setState(() => _locationStatus = '轨迹读取中断，手表运动仍在继续');
+          },
+        );
   }
 
   @override
@@ -1365,10 +1593,17 @@ class _SportSessionPageState extends State<SportSessionPage> {
           _InlineNotice(
             message: widget.controller.connectedDevice == null
                 ? '请先在设备页连接手表，运动模式将由手表记录。'
-                : '已连接 ${widget.controller.connectedDevice!.name}，运动记录结束后会从手表读取。',
+                : '已连接 ${widget.controller.connectedDevice!.name}（${widget.controller.connectedDevice!.sdkSource.shortLabel}）。$_locationStatus',
             icon: Icons.watch_rounded,
             color: SaydianColors.blue,
           ),
+          if (_routePoints.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            SportRoutePreview(
+              points: _routePoints,
+              distanceKm: _routeDistanceKm,
+            ),
+          ],
           const SizedBox(height: 22),
           FilledButton.icon(
             onPressed: widget.controller.connectedDevice == null
@@ -1461,6 +1696,12 @@ class _SportRecordTile extends StatelessWidget {
     final distanceUnit = usesMiles ? '英里' : '公里';
     return Card(
       child: ListTile(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) =>
+                SportRecordDetailPage(controller: controller, record: record),
+          ),
+        ),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         leading: const CircleAvatar(
           backgroundColor: Color(0xFFE8F1FF),
@@ -1484,6 +1725,170 @@ class _SportRecordTile extends StatelessWidget {
       ),
     );
   }
+}
+
+class SportRecordDetailPage extends StatelessWidget {
+  const SportRecordDetailPage({
+    required this.controller,
+    required this.record,
+    super.key,
+  });
+
+  final AppController controller;
+  final SportRecord record;
+
+  @override
+  Widget build(BuildContext context) {
+    final duration = Duration(seconds: record.durationSeconds);
+    final distance = controller.distanceUnit == '英里'
+        ? record.distanceKm * 0.621371
+        : record.distanceKm;
+    final unit = controller.distanceUnit == '英里' ? '英里' : '公里';
+    return Scaffold(
+      appBar: AppBar(title: Text('${record.mode.label}详情')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          if (record.routePoints.length >= 2)
+            SportRoutePreview(
+              points: record.routePoints,
+              distanceKm: record.distanceKm,
+            )
+          else
+            const _InlineNotice(
+              message: '该记录没有手机前台轨迹，仍保留手表运动数据。',
+              icon: Icons.route_outlined,
+              color: SaydianColors.orange,
+            ),
+          const SizedBox(height: 14),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  title: const Text('运动时长'),
+                  trailing: Text(
+                    '${duration.inHours.toString().padLeft(2, '0')}:${duration.inMinutes.remainder(60).toString().padLeft(2, '0')}:${duration.inSeconds.remainder(60).toString().padLeft(2, '0')}',
+                  ),
+                ),
+                const Divider(indent: 16),
+                ListTile(
+                  title: const Text('距离'),
+                  trailing: Text('${distance.toStringAsFixed(2)} $unit'),
+                ),
+                if (record.calories > 0) ...[
+                  const Divider(indent: 16),
+                  ListTile(
+                    title: const Text('热量'),
+                    trailing: Text('${record.calories.toStringAsFixed(1)} 千卡'),
+                  ),
+                ],
+                if (record.startedAt != null) ...[
+                  const Divider(indent: 16),
+                  ListTile(
+                    title: const Text('开始时间'),
+                    trailing: Text(
+                      DateFormat(
+                        'yyyy-MM-dd HH:mm',
+                      ).format(record.startedAt!.toLocal()),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class SportRoutePreview extends StatelessWidget {
+  const SportRoutePreview({
+    required this.points,
+    required this.distanceKm,
+    super.key,
+  });
+
+  final List<SportRoutePoint> points;
+  final double distanceKm;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            height: 210,
+            width: double.infinity,
+            child: CustomPaint(
+              painter: _RoutePainter(points),
+              child: const SizedBox.expand(),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(13),
+            child: Text(
+              '真实轨迹形状 · ${points.length} 个定位点 · ${distanceKm.toStringAsFixed(2)} 公里\n无地图服务配置时不显示虚假底图',
+              style: const TextStyle(
+                color: SaydianColors.muted,
+                fontSize: 12,
+                height: 1.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RoutePainter extends CustomPainter {
+  const _RoutePainter(this.points);
+
+  final List<SportRoutePoint> points;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = const Color(0xFFF0F4F3),
+    );
+    if (points.length < 2) return;
+    final minLat = points.map((point) => point.latitude).reduce(math.min);
+    final maxLat = points.map((point) => point.latitude).reduce(math.max);
+    final minLng = points.map((point) => point.longitude).reduce(math.min);
+    final maxLng = points.map((point) => point.longitude).reduce(math.max);
+    final latSpan = math.max(maxLat - minLat, 0.00001);
+    final lngSpan = math.max(maxLng - minLng, 0.00001);
+    const padding = 24.0;
+    final path = Path();
+    for (var index = 0; index < points.length; index++) {
+      final point = points[index];
+      final x =
+          padding +
+          (point.longitude - minLng) / lngSpan * (size.width - padding * 2);
+      final y =
+          size.height -
+          padding -
+          (point.latitude - minLat) / latSpan * (size.height - padding * 2);
+      index == 0 ? path.moveTo(x, y) : path.lineTo(x, y);
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = SaydianColors.blue
+        ..strokeWidth = 5
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _RoutePainter oldDelegate) =>
+      oldDelegate.points != points;
 }
 
 String _healthDisplayValue(HealthRecord? record, AppController controller) {
@@ -1671,59 +2076,8 @@ class HealthHistoryPage extends StatelessWidget {
   final HealthMetric metric;
 
   @override
-  Widget build(BuildContext context) {
-    final records =
-        controller.healthRecords
-            .where((record) => record.metric == metric)
-            .toList()
-          ..sort((left, right) => right.measuredAt.compareTo(left.measuredAt));
-    return Scaffold(
-      appBar: AppBar(title: Text('${metric.label}数据')),
-      body: records.isEmpty
-          ? const Center(
-              child: Text(
-                '暂无历史数据',
-                style: TextStyle(color: SaydianColors.muted),
-              ),
-            )
-          : ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: records.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 10),
-              itemBuilder: (context, index) {
-                final record = records[index];
-                return Card(
-                  child: ListTile(
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        settings: const RouteSettings(
-                          name: 'health-record-detail',
-                        ),
-                        builder: (_) => HealthRecordDetailPage(
-                          controller: controller,
-                          record: record,
-                        ),
-                      ),
-                    ),
-                    leading: const CircleAvatar(
-                      child: Icon(Icons.monitor_heart_outlined),
-                    ),
-                    title: Text(
-                      '${_healthDisplayValue(record, controller)} ${_healthDisplayUnit(metric, record, controller)}',
-                      style: const TextStyle(fontWeight: FontWeight.w900),
-                    ),
-                    subtitle: Text(
-                      DateFormat(
-                        'yyyy-MM-dd HH:mm:ss',
-                      ).format(record.measuredAt.toLocal()),
-                    ),
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                  ),
-                );
-              },
-            ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      HealthTrendPage(controller: controller, metric: metric);
 }
 
 class AiPage extends StatelessWidget {
@@ -2207,12 +2561,22 @@ class DevicePage extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            connected.name,
-                            style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w900,
-                            ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  connected.name,
+                                  style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                              DeviceSdkBadge(
+                                source: connected.sdkSource,
+                                compact: true,
+                              ),
+                            ],
                           ),
                           const SizedBox(height: 5),
                           Text(
@@ -2638,18 +3002,31 @@ class _DeviceSearchPageState extends State<DeviceSearchPage> {
                                           crossAxisAlignment:
                                               CrossAxisAlignment.start,
                                           children: [
-                                            Text(
-                                              device.name,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                fontSize: 16,
-                                                fontWeight: FontWeight.w800,
-                                              ),
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: Text(
+                                                    device.name,
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      fontSize: 16,
+                                                      fontWeight:
+                                                          FontWeight.w800,
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                DeviceSdkBadge(
+                                                  source: device.sdkSource,
+                                                  compact: true,
+                                                ),
+                                              ],
                                             ),
                                             const SizedBox(height: 5),
                                             Text(
-                                              device.id,
+                                              device.nativeId,
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
                                               style: const TextStyle(
@@ -2839,6 +3216,13 @@ class DeviceInfoPage extends StatelessWidget {
                 ),
                 const Divider(indent: 16),
                 ListTile(
+                  title: const Text('接入方案'),
+                  trailing: device == null
+                      ? const Text('--')
+                      : DeviceSdkBadge(source: device.sdkSource),
+                ),
+                const Divider(indent: 16),
+                ListTile(
                   title: const Text('设备型号'),
                   trailing: Text(device?.model ?? '--'),
                 ),
@@ -2850,7 +3234,7 @@ class DeviceInfoPage extends StatelessWidget {
                 const Divider(indent: 16),
                 ListTile(
                   title: const Text('设备标识'),
-                  subtitle: Text(device?.id ?? '--'),
+                  subtitle: Text(device?.nativeId ?? '--'),
                 ),
               ],
             ),
@@ -3055,7 +3439,12 @@ class CarePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final memberCount = controller.careMembers.length;
     return RefreshIndicator(
-      onRefresh: controller.refreshCare,
+      onRefresh: () async {
+        await Future.wait([
+          controller.refreshCare(),
+          controller.refreshCareInvitations(),
+        ]);
+      },
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
@@ -3131,6 +3520,27 @@ class CarePage extends StatelessWidget {
               leading: const Icon(Icons.manage_accounts_outlined),
               title: const Text('共享管理'),
               subtitle: const Text('查看成员和数据授权说明'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Card(
+            child: ListTile(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  settings: const RouteSettings(name: 'care-invitations'),
+                  builder: (_) => CareInvitationsPage(controller: controller),
+                ),
+              ),
+              leading: const Icon(Icons.mark_email_unread_outlined),
+              title: const Text('关爱邀请'),
+              subtitle: Text(
+                controller.careInvitations.isEmpty
+                    ? controller.careStatus == '服务暂不可用'
+                          ? '服务暂不可用'
+                          : '暂无待处理邀请'
+                    : '${controller.careInvitations.length} 条邀请',
+              ),
               trailing: const Icon(Icons.chevron_right_rounded),
             ),
           ),
@@ -3322,55 +3732,68 @@ class _CareMemberPageState extends State<CareMemberPage> {
   }
 }
 
+class _AddCareDialog extends StatefulWidget {
+  const _AddCareDialog();
+
+  @override
+  State<_AddCareDialog> createState() => _AddCareDialogState();
+}
+
+class _AddCareDialogState extends State<_AddCareDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _mobileController = TextEditingController();
+
+  @override
+  void dispose() {
+    _mobileController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (_formKey.currentState?.validate() ?? false) {
+      Navigator.of(context).pop(_mobileController.text.trim());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('添加关爱'),
+    content: Form(
+      key: _formKey,
+      child: TextFormField(
+        controller: _mobileController,
+        autofocus: true,
+        keyboardType: TextInputType.phone,
+        textInputAction: TextInputAction.done,
+        decoration: const InputDecoration(
+          labelText: '对方手机号',
+          hintText: '请输入手机号',
+        ),
+        validator: (value) =>
+            RegExp(r'^\d{6,20}$').hasMatch(value?.trim() ?? '')
+            ? null
+            : '请输入正确的手机号',
+        onFieldSubmitted: (_) => _submit(),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('取消'),
+      ),
+      FilledButton(onPressed: _submit, child: const Text('发送')),
+    ],
+  );
+}
+
 Future<void> _showAddCareDialog(
   BuildContext context,
   AppController controller,
 ) async {
-  final formKey = GlobalKey<FormState>();
-  final mobileController = TextEditingController();
   final mobile = await showDialog<String>(
     context: context,
-    builder: (dialogContext) => AlertDialog(
-      title: const Text('添加关爱'),
-      content: Form(
-        key: formKey,
-        child: TextFormField(
-          controller: mobileController,
-          autofocus: true,
-          keyboardType: TextInputType.phone,
-          textInputAction: TextInputAction.done,
-          decoration: const InputDecoration(
-            labelText: '对方手机号',
-            hintText: '请输入手机号',
-          ),
-          validator: (value) =>
-              RegExp(r'^\d{6,20}$').hasMatch(value?.trim() ?? '')
-              ? null
-              : '请输入正确的手机号',
-          onFieldSubmitted: (_) {
-            if (formKey.currentState?.validate() ?? false) {
-              Navigator.of(dialogContext).pop(mobileController.text.trim());
-            }
-          },
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(dialogContext).pop(),
-          child: const Text('取消'),
-        ),
-        FilledButton(
-          onPressed: () {
-            if (formKey.currentState?.validate() ?? false) {
-              Navigator.of(dialogContext).pop(mobileController.text.trim());
-            }
-          },
-          child: const Text('发送'),
-        ),
-      ],
-    ),
+    builder: (_) => const _AddCareDialog(),
   );
-  mobileController.dispose();
   if (mobile == null || !context.mounted) return;
 
   final success = await controller.addCare(mobile);
@@ -3604,8 +4027,10 @@ class SettingsPage extends StatelessWidget {
                       child: _MyServiceEntry(
                         label: '关于我们',
                         icon: Icons.info_outline_rounded,
-                        onTap: () =>
-                            _openPage(context, const AboutSaydianPage()),
+                        onTap: () => _openPage(
+                          context,
+                          AboutSaydianPage(controller: controller),
+                        ),
                       ),
                     ),
                   ],
