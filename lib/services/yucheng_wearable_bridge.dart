@@ -45,6 +45,7 @@ class YuchengWearableBridge implements WearableBridge {
             id: '${row['identifier'] ?? ''}',
             name: '${row['name'] ?? ''}',
             rssi: (row['rssi'] as num?)?.toInt(),
+            hardwareAddress: row['hardwareAddress']?.toString(),
             firmwareVersion: row['firmwareVersion']?.toString(),
           ),
         )
@@ -140,10 +141,7 @@ class YuchengWearableBridge implements WearableBridge {
       // devices and unrelated UI flows are never held back.
       await Future<void>.delayed(initialHealthSettleDelay);
       if (_deviceId != id) {
-        throw PlatformException(
-          code: 'CONNECTION_DROPPED',
-          message: '设备连接已断开',
-        );
+        throw PlatformException(code: 'CONNECTION_DROPPED', message: '设备连接已断开');
       }
     }
     final rows = <int, List<Map<String, Object?>>>{};

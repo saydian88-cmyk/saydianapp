@@ -139,6 +139,7 @@ class DeviceInfo {
     required this.name,
     this.model,
     this.serialNumber,
+    this.hardwareAddress,
     this.firmwareVersion,
     this.rssi,
     this.lastSyncAt,
@@ -148,6 +149,7 @@ class DeviceInfo {
   final String name;
   final String? model;
   final String? serialNumber;
+  final String? hardwareAddress;
   final String? firmwareVersion;
   final int? rssi;
   final DateTime? lastSyncAt;
@@ -157,6 +159,7 @@ class DeviceInfo {
     name: '${map['name'] ?? '赛电设备'}',
     model: map['model']?.toString(),
     serialNumber: map['serialNumber']?.toString(),
+    hardwareAddress: map['hardwareAddress']?.toString(),
     firmwareVersion: map['firmwareVersion']?.toString(),
     rssi: map['rssi'] is num ? (map['rssi'] as num).toInt() : null,
     lastSyncAt: DateTime.tryParse('${map['lastSyncAt'] ?? ''}'),
@@ -167,6 +170,7 @@ class DeviceInfo {
     'name': name,
     'model': model,
     'serialNumber': serialNumber,
+    'hardwareAddress': hardwareAddress,
     'firmwareVersion': firmwareVersion,
     'rssi': rssi,
     'lastSyncAt': lastSyncAt?.toUtc().toIso8601String(),
@@ -178,6 +182,37 @@ class DeviceInfo {
     final source = sdkSource;
     if (source == WearableSdkSource.unknown) return id;
     return id.substring(id.indexOf(':') + 1);
+  }
+
+  String? get macAddress {
+    for (final candidate in [hardwareAddress, nativeId]) {
+      final value = candidate?.trim() ?? '';
+      if (value.isEmpty) continue;
+      final separated = value.replaceAll('-', ':').toUpperCase();
+      if (RegExp(r'^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$').hasMatch(separated)) {
+        return separated;
+      }
+      final compact = value.replaceAll(RegExp(r'[^0-9A-Fa-f]'), '');
+      if (compact.length == 12) {
+        return List.generate(
+          6,
+          (index) => compact.substring(index * 2, index * 2 + 2),
+        ).join(':').toUpperCase();
+      }
+    }
+    return null;
+  }
+
+  String get identifierLabel {
+    final address = macAddress;
+    if (address != null) return 'MAC · $address';
+    final identifier = nativeId;
+    if (RegExp(
+      r'^[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$',
+    ).hasMatch(identifier)) {
+      return 'iOS 标识 · ${identifier.substring(0, 8)}…${identifier.substring(identifier.length - 8)}';
+    }
+    return '设备标识 · $identifier';
   }
 }
 

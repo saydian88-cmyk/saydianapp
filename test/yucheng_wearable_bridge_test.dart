@@ -70,6 +70,20 @@ void main() {
     expect(client.modelCalls, 0);
   });
 
+  test('preserves the vendor MAC separately from the iOS identifier', () async {
+    final client = _FakeYuchengClient(modelName: 'W8S');
+    final bridge = YuchengWearableBridge(
+      client: client,
+      initialHealthSettleDelay: Duration.zero,
+    );
+
+    final device = (await bridge.scanDevices()).single;
+
+    expect(device.id, 'YC-01');
+    expect(device.hardwareAddress, '07:43:00:00:4D:E9');
+    expect(device.macAddress, '07:43:00:00:4D:E9');
+  });
+
   test('times out a Yucheng history read instead of hanging sync', () async {
     final client = _FakeYuchengClient(
       modelName: 'W8S',
@@ -145,7 +159,12 @@ class _FakeYuchengClient implements YuchengProductClient {
   }) async {}
   @override
   Future<List<Map<String, Object?>>> scan() async => [
-    {'identifier': 'YC-01', 'name': scannedName, 'rssi': -40},
+    {
+      'identifier': 'YC-01',
+      'name': scannedName,
+      'rssi': -40,
+      'hardwareAddress': '07:43:00:00:4D:E9',
+    },
   ];
   @override
   Future<void> stopScan() async {}

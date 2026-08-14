@@ -3026,7 +3026,7 @@ class _DeviceSearchPageState extends State<DeviceSearchPage> {
                                             ),
                                             const SizedBox(height: 5),
                                             Text(
-                                              device.nativeId,
+                                              device.identifierLabel,
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
                                               style: const TextStyle(
@@ -3233,8 +3233,16 @@ class DeviceInfoPage extends StatelessWidget {
                 ),
                 const Divider(indent: 16),
                 ListTile(
-                  title: const Text('设备标识'),
-                  subtitle: Text(device?.nativeId ?? '--'),
+                  title: Text(
+                    device?.macAddress != null
+                        ? 'MAC 地址'
+                        : defaultTargetPlatform == TargetPlatform.iOS
+                        ? 'iOS 设备标识'
+                        : '设备标识',
+                  ),
+                  subtitle: Text(
+                    device?.macAddress ?? device?.nativeId ?? '--',
+                  ),
                 ),
               ],
             ),

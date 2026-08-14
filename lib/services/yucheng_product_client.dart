@@ -127,6 +127,9 @@ class PluginYuchengProductClient implements YuchengProductClient {
             'identifier': d.deviceIdentifier,
             'name': d.name,
             'rssi': d.rssiValue,
+            'hardwareAddress': d.macAddress.trim().isEmpty
+                ? null
+                : d.macAddress,
             'firmwareVersion': d.firmwareVersion == 0
                 ? null
                 : '${d.firmwareVersion}',

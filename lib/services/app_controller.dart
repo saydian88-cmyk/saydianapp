@@ -1468,6 +1468,7 @@ class AppController extends ChangeNotifier {
           ? details.model
           : device.model,
       serialNumber: details.serialNumber ?? device.serialNumber,
+      hardwareAddress: details.hardwareAddress ?? device.hardwareAddress,
       firmwareVersion: (firmware?.isNotEmpty ?? false)
           ? firmware
           : device.firmwareVersion,
