@@ -1,4 +1,5 @@
 import '../domain/models.dart';
+import '../domain/health_record_validation.dart';
 import 'api_client.dart';
 import 'local_health_store.dart';
 
@@ -23,11 +24,26 @@ class HealthSyncService {
   Future<SyncOutcome> synchronizeNow() async {
     var uploaded = 0;
     var rejected = 0;
+    var quarantined = 0;
     while (true) {
-      final records = await _store.pending(limit: 200);
-      if (records.isEmpty) {
-        return SyncOutcome(uploaded: uploaded, rejected: rejected);
+      final pending = await _store.pending(limit: 200);
+      if (pending.isEmpty) {
+        return SyncOutcome(
+          uploaded: uploaded,
+          rejected: rejected,
+          message: quarantined == 0 ? null : '已隔离 $quarantined 条无效设备数据',
+        );
       }
+      final invalid = pending
+          .where((record) => !hasSaneWearableTransportValues(record))
+          .toList();
+      if (invalid.isNotEmpty) {
+        await _store.markInvalid(invalid.map((record) => record.id));
+        quarantined += invalid.length;
+        rejected += invalid.length;
+      }
+      final records = pending.where(hasSaneWearableTransportValues).toList();
+      if (records.isEmpty) continue;
       final cursor = await _store.readCursor();
       try {
         final result = await _api.uploadHealthBatch(

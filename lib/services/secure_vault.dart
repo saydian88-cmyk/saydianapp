@@ -9,6 +9,8 @@ abstract interface class SessionVault {
   Future<Session?> readSession();
   Future<void> writeSession(Session session);
   Future<void> clearSession();
+  Future<HealthWarningSettings> readHealthWarningSettings();
+  Future<void> writeHealthWarningSettings(HealthWarningSettings settings);
   Future<String> databaseKey();
 }
 
@@ -18,6 +20,7 @@ class SecureSessionVault implements SessionVault {
 
   static const _sessionKey = 'saydian.session.v1';
   static const _databaseKey = 'saydian.database.key.v1';
+  static const _healthWarningKey = 'saydian.health-warning.v1';
 
   final FlutterSecureStorage _storage;
 
@@ -45,6 +48,28 @@ class SecureSessionVault implements SessionVault {
   Future<void> clearSession() => _storage.delete(key: _sessionKey);
 
   @override
+  Future<HealthWarningSettings> readHealthWarningSettings() async {
+    final raw = await _storage.read(key: _healthWarningKey);
+    if (raw == null || raw.isEmpty) return const HealthWarningSettings();
+    try {
+      final value = jsonDecode(raw);
+      if (value is! Map) return const HealthWarningSettings();
+      return HealthWarningSettings.fromJson(
+        value.map((key, value) => MapEntry('$key', value)),
+      );
+    } on FormatException {
+      return const HealthWarningSettings();
+    }
+  }
+
+  @override
+  Future<void> writeHealthWarningSettings(HealthWarningSettings settings) =>
+      _storage.write(
+        key: _healthWarningKey,
+        value: jsonEncode(settings.toJson()),
+      );
+
+  @override
   Future<String> databaseKey() async {
     final existing = await _storage.read(key: _databaseKey);
     if (existing != null && existing.length >= 24) return existing;
@@ -56,6 +81,7 @@ class SecureSessionVault implements SessionVault {
 
 class MemorySessionVault implements SessionVault {
   Session? session;
+  HealthWarningSettings healthWarningSettings = const HealthWarningSettings();
   String key = 'test-database-key-that-is-long-enough';
 
   @override
@@ -68,5 +94,14 @@ class MemorySessionVault implements SessionVault {
   Future<Session?> readSession() async => session;
 
   @override
+  Future<HealthWarningSettings> readHealthWarningSettings() async =>
+      healthWarningSettings;
+
+  @override
   Future<void> writeSession(Session value) async => session = value;
+
+  @override
+  Future<void> writeHealthWarningSettings(
+    HealthWarningSettings settings,
+  ) async => healthWarningSettings = settings;
 }

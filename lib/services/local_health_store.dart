@@ -21,6 +21,7 @@ abstract interface class HealthStore {
   Future<List<SportRecord>> localSportRecords();
   Future<List<HealthRecord>> pending({int limit = 200});
   Future<void> markSynced(Iterable<String> ids);
+  Future<void> markInvalid(Iterable<String> ids);
   Future<String?> readCursor();
   Future<void> writeCursor(String cursor);
   Future<void> close();
@@ -132,6 +133,7 @@ class EncryptedHealthStore implements HealthStore {
     final rows = await _db.query(
       'health_records',
       columns: ['payload'],
+      where: 'synced != -1',
       orderBy: 'measured_at DESC',
       limit: limit,
     );
@@ -147,7 +149,8 @@ class EncryptedHealthStore implements HealthStore {
     final rows = await _db.query(
       'health_records',
       columns: ['payload'],
-      where: 'metric = ? AND measured_at >= ? AND measured_at < ?',
+      where:
+          'metric = ? AND measured_at >= ? AND measured_at < ? AND synced != -1',
       whereArgs: [
         metric.wireName,
         start.toUtc().toIso8601String(),
@@ -163,10 +166,10 @@ class EncryptedHealthStore implements HealthStore {
     final rows = await _db.rawQuery('''
       SELECT payload
       FROM health_records AS current
-      WHERE measured_at = (
+      WHERE current.synced != -1 AND measured_at = (
         SELECT MAX(candidate.measured_at)
         FROM health_records AS candidate
-        WHERE candidate.metric = current.metric
+        WHERE candidate.metric = current.metric AND candidate.synced != -1
       )
       ORDER BY measured_at DESC
     ''');
@@ -233,6 +236,19 @@ class EncryptedHealthStore implements HealthStore {
   }
 
   @override
+  Future<void> markInvalid(Iterable<String> ids) async {
+    final values = ids.toSet().toList();
+    if (values.isEmpty) return;
+    final placeholders = List.filled(values.length, '?').join(',');
+    await _db.update(
+      'health_records',
+      {'synced': -1},
+      where: 'id IN ($placeholders)',
+      whereArgs: values,
+    );
+  }
+
+  @override
   Future<String?> readCursor() async {
     final rows = await _db.query(
       'metadata',
@@ -260,6 +276,7 @@ class EncryptedHealthStore implements HealthStore {
 class MemoryHealthStore implements HealthStore {
   final Map<String, HealthRecord> _records = {};
   final Set<String> _synced = {};
+  final Set<String> _invalid = {};
   String? _cursor;
   final Map<String, SportRecord> _sportRecords = {};
 
@@ -275,8 +292,11 @@ class MemoryHealthStore implements HealthStore {
 
   @override
   Future<List<HealthRecord>> recent({int limit = 200}) async {
-    final values = _records.values.toList()
-      ..sort((a, b) => b.measuredAt.compareTo(a.measuredAt));
+    final values =
+        _records.values
+            .where((record) => !_invalid.contains(record.id))
+            .toList()
+          ..sort((a, b) => b.measuredAt.compareTo(a.measuredAt));
     return values.take(limit).toList();
   }
 
@@ -290,6 +310,7 @@ class MemoryHealthStore implements HealthStore {
         _records.values
             .where(
               (record) =>
+                  !_invalid.contains(record.id) &&
                   record.metric == metric &&
                   !record.measuredAt.isBefore(start) &&
                   record.measuredAt.isBefore(end),
@@ -303,6 +324,7 @@ class MemoryHealthStore implements HealthStore {
   Future<List<HealthRecord>> latestForEachMetric() async {
     final latest = <HealthMetric, HealthRecord>{};
     for (final record in _records.values) {
+      if (_invalid.contains(record.id)) continue;
       final current = latest[record.metric];
       if (current == null || record.measuredAt.isAfter(current.measuredAt)) {
         latest[record.metric] = record;
@@ -331,12 +353,18 @@ class MemoryHealthStore implements HealthStore {
 
   @override
   Future<List<HealthRecord>> pending({int limit = 200}) async => _records.values
-      .where((record) => !_synced.contains(record.id))
+      .where(
+        (record) =>
+            !_synced.contains(record.id) && !_invalid.contains(record.id),
+      )
       .take(limit)
       .toList();
 
   @override
   Future<void> markSynced(Iterable<String> ids) async => _synced.addAll(ids);
+
+  @override
+  Future<void> markInvalid(Iterable<String> ids) async => _invalid.addAll(ids);
 
   @override
   Future<String?> readCursor() async => _cursor;

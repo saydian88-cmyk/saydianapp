@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../domain/device_state_machine.dart';
 import '../domain/feature_models.dart';
+import '../domain/health_record_validation.dart';
 import '../domain/models.dart';
 import 'api_client.dart';
 import 'local_health_store.dart';
@@ -40,6 +41,8 @@ class AppController extends ChangeNotifier {
   StreamSubscription<WearableEvent>? _wearableEvents;
   StreamSubscription<DeviceConnectionState>? _deviceStates;
   StreamSubscription<List<ConnectivityResult>>? _connectivity;
+  Timer? _measurementTimeout;
+  HealthMetric? _activeMeasurementMetric;
   bool _syncing = false;
   bool _disposed = false;
   int _deviceSyncGeneration = 0;
@@ -54,6 +57,7 @@ class AppController extends ChangeNotifier {
   Session? session;
   int selectedTab = 0;
   String? errorMessage;
+  String? measurementErrorMessage;
   String storageStatus = '正在准备数据';
   String sdkStatus = '等待连接';
   String syncStatus = '尚未同步';
@@ -69,6 +73,9 @@ class AppController extends ChangeNotifier {
   String careStatus = '等待加载';
   List<Map<String, Object?>> aiArticles = const [];
   List<Map<String, Object?>> aiMessages = const [];
+  String? articleCategoryLoadError;
+  String? articleListLoadError;
+  String? articleDetailLoadError;
   List<Map<String, Object?>> notifications = const [];
   List<Map<String, Object?>> orders = const [];
   List<Map<String, Object?>> addresses = const [];
@@ -89,9 +96,13 @@ class AppController extends ChangeNotifier {
   int heartRateWarning = 120;
   bool heartRateWarningSupported = false;
   String deviceSettingsStatus = '连接手表后可读取';
+  HealthWarningSettings healthWarningSettings = const HealthWarningSettings();
+  List<HealthWarningAlert> healthWarningAlerts = const [];
+  HealthWarningAlert? activeHealthWarningAlert;
 
   bool get isAuthenticated => session != null;
   DeviceConnectionState get deviceState => deviceMachine.state;
+  HealthMetric? get activeMeasurementMetric => _activeMeasurementMetric;
 
   Map<HealthMetric, HealthRecord> get latestByMetric {
     final result = <HealthMetric, HealthRecord>{};
@@ -117,12 +128,12 @@ class AppController extends ChangeNotifier {
       storageStatus = '本机数据暂时无法读取';
     }
     try {
+      healthWarningSettings = await _vault.readHealthWarningSettings();
+    } catch (_) {
+      healthWarningSettings = const HealthWarningSettings();
+    }
+    try {
       session = await _vault.readSession();
-      if (session?.isExpired ?? false) {
-        errorMessage = '登录状态已过期，请重新登录';
-        await _vault.clearSession();
-        session = null;
-      }
     } catch (_) {
       errorMessage = '安全存储初始化失败';
     }
@@ -164,7 +175,36 @@ class AppController extends ChangeNotifier {
     });
   }
 
-  Future<bool> register(String mobile, String password) async {
+  Future<bool> sendSmsCode({
+    required String mobile,
+    required String usage,
+  }) async {
+    final normalized = mobile.trim();
+    if (!RegExp(r'^1\d{10}$').hasMatch(normalized)) {
+      errorMessage = '请输入正确的中国大陆手机号';
+      notifyListeners();
+      return false;
+    }
+    final api = _api;
+    if (api is! SaydianSmsAuthApi) {
+      errorMessage = '短信服务暂时无法使用，请稍后再试';
+      notifyListeners();
+      return false;
+    }
+    return _guard(
+      () => (api as SaydianSmsAuthApi).sendSmsCode(
+        mobile: normalized,
+        usage: usage,
+      ),
+    );
+  }
+
+  Future<bool> register(
+    String mobile,
+    String password, {
+    String? code,
+    String? nickname,
+  }) async {
     if (!RegExp(r'^1\d{10}$').hasMatch(mobile.trim())) {
       errorMessage = '请输入正确的中国大陆手机号';
       notifyListeners();
@@ -175,13 +215,65 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+    final smsApi = _api is SaydianSmsAuthApi ? _api as SaydianSmsAuthApi : null;
+    if (smsApi != null && !RegExp(r'^\d{4,6}$').hasMatch(code?.trim() ?? '')) {
+      errorMessage = '请输入收到的短信验证码';
+      notifyListeners();
+      return false;
+    }
     return _guard(() async {
-      session = await _api.register(mobile.trim(), password);
+      session = smsApi == null
+          ? await _api.register(mobile.trim(), password)
+          : await smsApi.registerWithSms(
+              mobile: mobile.trim(),
+              code: code!.trim(),
+              password: password,
+              nickname: nickname?.trim().isNotEmpty == true
+                  ? nickname!.trim()
+                  : '赛电用户${mobile.trim().substring(7)}',
+            );
       isPreviewMode = false;
       await refreshCare();
       await refreshCareInvitations();
       await refreshMemberProfile();
       await refreshActivityGoals();
+    });
+  }
+
+  Future<bool> resetPassword({
+    required String mobile,
+    required String code,
+    required String password,
+  }) async {
+    final normalized = mobile.trim();
+    if (!RegExp(r'^1\d{10}$').hasMatch(normalized)) {
+      errorMessage = '请输入正确的中国大陆手机号';
+      notifyListeners();
+      return false;
+    }
+    if (!RegExp(r'^\d{4,6}$').hasMatch(code.trim())) {
+      errorMessage = '请输入收到的短信验证码';
+      notifyListeners();
+      return false;
+    }
+    if (password.length < 6) {
+      errorMessage = '密码至少需要 6 位';
+      notifyListeners();
+      return false;
+    }
+    final api = _api;
+    if (api is! SaydianSmsAuthApi) {
+      errorMessage = '找回密码服务暂时无法使用，请稍后再试';
+      notifyListeners();
+      return false;
+    }
+    return _guard(() async {
+      session = await (api as SaydianSmsAuthApi).resetPassword(
+        mobile: normalized,
+        code: code.trim(),
+        password: password,
+      );
+      isPreviewMode = false;
     });
   }
 
@@ -227,9 +319,13 @@ class AppController extends ChangeNotifier {
   });
 
   void selectTab(int index) {
-    if (selectedTab == index) return;
-    selectedTab = index;
-    notifyListeners();
+    if (selectedTab != index) {
+      selectedTab = index;
+      notifyListeners();
+    }
+    if (index == 1 && connectedDevice != null) {
+      unawaited(refreshConnectedDeviceDetails());
+    }
   }
 
   Future<void> scanDevices() async {
@@ -398,8 +494,11 @@ class AppController extends ChangeNotifier {
     _clearDeviceSyncError();
     notifyListeners();
     try {
-      final records = await _wearable.syncHealthData();
+      final receivedRecords = await _wearable.syncHealthData();
       if (!_isDeviceSyncCurrent(generation, deviceId)) return false;
+      final records = receivedRecords
+          .where(hasSaneWearableTransportValues)
+          .toList();
       await _healthStore.upsert(records);
       if (!_isDeviceSyncCurrent(generation, deviceId)) return false;
       await _refreshHealthRecordCache();
@@ -467,41 +566,113 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> startMeasurement(HealthMetric metric) async {
+  Future<bool> refreshConnectedDeviceDetails() async {
+    final current = connectedDevice;
+    final bridge = _wearable;
+    if (current == null) return false;
+    if (bridge is! WearableDeviceDetailsBridge) return true;
+    try {
+      final details = await (bridge as WearableDeviceDetailsBridge)
+          .getConnectedDeviceDetails();
+      if (_disposed) return false;
+      if (details == null) {
+        _invalidateDeviceSync();
+        connectedDevice = null;
+        _latestDeviceDetails = null;
+        capabilities = null;
+        deviceFeatureData = const {};
+        deviceFeatureBusy = const {};
+        if (deviceState != DeviceConnectionState.disconnected) {
+          try {
+            deviceMachine.transition(DeviceConnectionState.disconnected);
+          } on StateError {
+            // A concurrent native disconnect may already have moved the state.
+          }
+        }
+        errorMessage = '手表连接已断开，请重新连接';
+        notifyListeners();
+        return false;
+      }
+      if (connectedDevice?.id != current.id || details.id != current.id) {
+        return connectedDevice != null;
+      }
+      _latestDeviceDetails = details;
+      connectedDevice = _mergeDeviceDetails(current);
+      notifyListeners();
+      return true;
+    } on PlatformException catch (error) {
+      errorMessage = _wearableErrorMessage(error, fallback: '设备信息刷新失败，请稍后重试');
+      notifyListeners();
+      return false;
+    } catch (_) {
+      errorMessage = '设备信息刷新失败，请稍后重试';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> startMeasurement(HealthMetric metric) async {
+    _measurementTimeout?.cancel();
+    _activeMeasurementMetric = null;
+    measurementErrorMessage = null;
+    errorMessage = null;
     if (connectedDevice == null) {
       errorMessage = '请先连接手表';
       notifyListeners();
-      return;
+      return false;
     }
     if (!(capabilities?.supports(metric) ?? false)) {
       errorMessage = '当前设备不支持${metric.label}测量';
       notifyListeners();
-      return;
+      return false;
     }
     try {
+      _activeMeasurementMetric = metric;
       deviceMachine.transition(DeviceConnectionState.measuring);
       await _wearable.startMeasurement(metric);
+      if (_activeMeasurementMetric != metric ||
+          measurementErrorMessage != null) {
+        return false;
+      }
+      _measurementTimeout = Timer(
+        const Duration(seconds: 75),
+        () => unawaited(_handleMeasurementTimeout(metric)),
+      );
+      notifyListeners();
+      return true;
     } on WearableSdkNotConfigured catch (_) {
-      errorMessage = '此功能暂时无法使用，请稍后再试';
-      deviceMachine.transition(DeviceConnectionState.error);
+      _activeMeasurementMetric = null;
+      measurementErrorMessage = '此功能暂时无法使用，请稍后再试';
+      errorMessage = measurementErrorMessage;
+      if (deviceState == DeviceConnectionState.measuring) {
+        deviceMachine.transition(DeviceConnectionState.ready);
+      }
     } on PlatformException catch (error) {
-      errorMessage = _wearableErrorMessage(
+      _activeMeasurementMetric = null;
+      measurementErrorMessage = _wearableErrorMessage(
         error,
         fallback: '${metric.label}测量失败',
       );
+      errorMessage = measurementErrorMessage;
       if (deviceState == DeviceConnectionState.measuring) {
         deviceMachine.transition(DeviceConnectionState.ready);
       }
     } catch (_) {
-      errorMessage = '${metric.label}测量失败，请稍后重试';
+      _activeMeasurementMetric = null;
+      measurementErrorMessage = '${metric.label}测量失败，请稍后重试';
+      errorMessage = measurementErrorMessage;
       if (deviceState == DeviceConnectionState.measuring) {
         deviceMachine.transition(DeviceConnectionState.ready);
       }
     }
     notifyListeners();
+    return false;
   }
 
   Future<void> stopMeasurement(HealthMetric metric) async {
+    _measurementTimeout?.cancel();
+    _measurementTimeout = null;
+    _activeMeasurementMetric = null;
     try {
       await _wearable.stopMeasurement(metric);
       if (deviceState == DeviceConnectionState.measuring) {
@@ -517,11 +688,73 @@ class AppController extends ChangeNotifier {
     required HealthMetric metric,
     required DateTime start,
     required DateTime end,
-  }) => _healthStore.range(metric: metric, start: start, end: end);
+  }) async => (await _healthStore.range(
+    metric: metric,
+    start: start,
+    end: end,
+  )).where(hasSaneWearableTransportValues).toList();
 
   void setUnits({String? distance, String? temperature}) {
     if (distance != null) distanceUnit = distance;
     if (temperature != null) temperatureUnit = temperature;
+    notifyListeners();
+  }
+
+  Future<void> _handleMeasurementTimeout(HealthMetric metric) async {
+    if (_activeMeasurementMetric != metric || _disposed) return;
+    _activeMeasurementMetric = null;
+    _measurementTimeout = null;
+    measurementErrorMessage = '长时间未检测到有效结果，请确认手表已贴合手腕后重新测量';
+    errorMessage = measurementErrorMessage;
+    if (deviceState == DeviceConnectionState.measuring) {
+      deviceMachine.transition(DeviceConnectionState.ready);
+    }
+    notifyListeners();
+    try {
+      await _wearable.stopMeasurement(metric);
+    } catch (_) {
+      // The timeout result is already actionable; a stop acknowledgement is
+      // best-effort and must not replace the wear guidance.
+    }
+  }
+
+  Future<bool> saveHealthWarningSettings(HealthWarningSettings settings) async {
+    if (settings.heartRateUpper < 20 || settings.heartRateUpper > 300) {
+      errorMessage = '心率报警值需设置在 20–300 bpm';
+      notifyListeners();
+      return false;
+    }
+    if (settings.systolicUpper < 60 || settings.systolicUpper > 300) {
+      errorMessage = '收缩压报警值需设置在 60–300 mmHg';
+      notifyListeners();
+      return false;
+    }
+    if (settings.diastolicUpper < 20 || settings.diastolicUpper > 200) {
+      errorMessage = '舒张压报警值需设置在 20–200 mmHg';
+      notifyListeners();
+      return false;
+    }
+    if (settings.temperatureUpper < 20 || settings.temperatureUpper > 45) {
+      errorMessage = '体温报警值需设置在 20–45℃';
+      notifyListeners();
+      return false;
+    }
+    try {
+      await _vault.writeHealthWarningSettings(settings);
+      healthWarningSettings = settings;
+      errorMessage = null;
+      notifyListeners();
+      return true;
+    } catch (_) {
+      errorMessage = '健康预警设置保存失败，请稍后重试';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  void dismissHealthWarningAlert() {
+    if (activeHealthWarningAlert == null) return;
+    activeHealthWarningAlert = null;
     notifyListeners();
   }
 
@@ -970,21 +1203,80 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<List<Map<String, Object?>>> loadArticleCategories({
+    int parentId = 3,
+  }) async {
+    articleCategoryLoadError = null;
+    final api = _api;
+    final articleApi = api is SaydianArticleApi
+        ? api as SaydianArticleApi
+        : null;
+    if (articleApi == null) {
+      articleCategoryLoadError = '健康百科分类接口未配置';
+      errorMessage = articleCategoryLoadError;
+      notifyListeners();
+      return const [];
+    }
+    try {
+      return await articleApi.getArticleCategories(parentId: parentId);
+    } on ApiException catch (error) {
+      articleCategoryLoadError = _apiErrorMessage(
+        error,
+        fallback: '健康百科分类暂时无法加载',
+      );
+      errorMessage = articleCategoryLoadError;
+      notifyListeners();
+      return const [];
+    }
+  }
+
+  Future<List<Map<String, Object?>>> loadArticlesByCategory({
+    int? categoryId,
+    int page = 1,
+  }) async {
+    articleListLoadError = null;
+    final api = _api;
+    final articleApi = api is SaydianArticleApi
+        ? api as SaydianArticleApi
+        : null;
+    if (articleApi == null) {
+      articleListLoadError = '健康百科文章接口未配置';
+      errorMessage = articleListLoadError;
+      notifyListeners();
+      return const [];
+    }
+    try {
+      return await articleApi.getArticlesByCategory(
+        categoryId: categoryId,
+        page: page,
+      );
+    } on ApiException catch (error) {
+      articleListLoadError = _apiErrorMessage(error, fallback: '健康百科文章暂时无法加载');
+      errorMessage = articleListLoadError;
+      notifyListeners();
+      return const [];
+    }
+  }
+
   Future<Map<String, Object?>> loadArticle(int id) async {
+    articleDetailLoadError = null;
     try {
       return await _api.getArticle(id);
     } on ApiException catch (error) {
-      errorMessage = _apiErrorMessage(error, fallback: '文章暂时无法加载');
+      articleDetailLoadError = _apiErrorMessage(error, fallback: '文章暂时无法加载');
+      errorMessage = articleDetailLoadError;
       notifyListeners();
       return const {};
     }
   }
 
   Future<Map<String, Object?>> loadSingleArticle(int id) async {
+    articleDetailLoadError = null;
     try {
       return await _api.getSingleArticle(id);
     } on ApiException catch (error) {
-      errorMessage = _apiErrorMessage(error, fallback: '内容暂时无法加载');
+      articleDetailLoadError = _apiErrorMessage(error, fallback: '内容暂时无法加载');
+      errorMessage = articleDetailLoadError;
       notifyListeners();
       return const {};
     }
@@ -1289,10 +1581,39 @@ class AppController extends ChangeNotifier {
     return message.isEmpty ? fallback : message;
   }
 
+  bool _isMeasurementErrorCode(String code) {
+    const measurementErrors = {
+      'HEART_NOT_WORN',
+      'HEART_DEVICE_BUSY',
+      'HEART_LOW_BATTERY',
+      'BLOOD_PRESSURE_FAILED',
+      'BLOOD_PRESSURE_INVALID',
+      'OXYGEN_UNSUPPORTED',
+      'OXYGEN_NOT_WORN',
+      'OXYGEN_DEVICE_BUSY',
+      'TEMPERATURE_UNSUPPORTED',
+      'TEMPERATURE_LOW_BATTERY',
+      'TEMPERATURE_SENSOR_ERROR',
+      'TEMPERATURE_DEVICE_BUSY',
+      'GLUCOSE_MEASUREMENT_FAILED',
+      'BODY_COMPOSITION_FAILED',
+      'BLOOD_COMPONENT_FAILED',
+      'ECG_MEASUREMENT_FAILED',
+      'MEASUREMENT_COMMAND_FAILED',
+    };
+    return measurementErrors.contains(code);
+  }
+
   String _wearableErrorMessage(
     PlatformException error, {
     required String fallback,
   }) {
+    final nativeMessage = error.message?.trim();
+    if (_isMeasurementErrorCode(error.code) &&
+        nativeMessage != null &&
+        nativeMessage.isNotEmpty) {
+      return nativeMessage;
+    }
     return switch (error.code) {
       'BLUETOOTH_DISABLED' => '请先打开手机蓝牙',
       'BLE_PERMISSION_DENIED' || 'LOCATION_SERVICE_DISABLED' => '允许相关权限后使用',
@@ -1356,6 +1677,7 @@ class AppController extends ChangeNotifier {
     } else if (event.type == 'healthRecord') {
       try {
         final record = HealthRecord.fromJson(event.payload);
+        if (!hasSaneWearableTransportValues(record)) return;
         unawaited(_saveWearableRecord(record));
       } catch (_) {
         errorMessage = '收到无法识别的设备数据';
@@ -1391,13 +1713,24 @@ class AppController extends ChangeNotifier {
         }
       }
     } else if (event.type == 'error') {
-      errorMessage = _wearableErrorMessage(
+      final errorCode = '${event.payload['code'] ?? 'WEARABLE_ERROR'}';
+      final resolvedMessage = _wearableErrorMessage(
         PlatformException(
-          code: '${event.payload['code'] ?? 'WEARABLE_ERROR'}',
+          code: errorCode,
           message: event.payload['message']?.toString(),
         ),
         fallback: '手表连接出现问题，请稍后重试',
       );
+      errorMessage = resolvedMessage;
+      if (_isMeasurementErrorCode(errorCode) && activeSport == null) {
+        _measurementTimeout?.cancel();
+        _measurementTimeout = null;
+        _activeMeasurementMetric = null;
+        measurementErrorMessage = resolvedMessage;
+        if (deviceState == DeviceConnectionState.measuring) {
+          deviceMachine.transition(DeviceConnectionState.ready);
+        }
+      }
     } else if (event.type == 'sportState' &&
         event.payload['value'] == 'stopped') {
       activeSport = null;
@@ -1478,8 +1811,14 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _saveWearableRecord(HealthRecord record) async {
+    if (!hasSaneWearableTransportValues(record)) return;
+    _measurementTimeout?.cancel();
+    _measurementTimeout = null;
+    _activeMeasurementMetric = null;
+    measurementErrorMessage = null;
     await _healthStore.upsert([record]);
     await _refreshHealthRecordCache();
+    _evaluateHealthWarning(record);
     if (deviceState == DeviceConnectionState.measuring) {
       deviceMachine.transition(DeviceConnectionState.ready);
     }
@@ -1487,9 +1826,69 @@ class AppController extends ChangeNotifier {
     unawaited(synchronizeCloud());
   }
 
+  void _evaluateHealthWarning(HealthRecord record) {
+    if (record.measuredAt.isBefore(
+      DateTime.now().toUtc().subtract(const Duration(minutes: 5)),
+    )) {
+      return;
+    }
+    final settings = healthWarningSettings;
+    String? message;
+    if (record.metric == HealthMetric.heartRate && settings.heartRateEnabled) {
+      final value = record.values['value'];
+      if (value != null && value > settings.heartRateUpper) {
+        final display = value % 1 == 0
+            ? value.toInt().toString()
+            : value.toStringAsFixed(1);
+        message = '心率 $display bpm，超过设定值 ${settings.heartRateUpper} bpm';
+      }
+    } else if (record.metric == HealthMetric.bloodPressure &&
+        settings.bloodPressureEnabled) {
+      final systolic = record.values['systolic'];
+      final diastolic = record.values['diastolic'];
+      final parts = <String>[];
+      if (systolic != null && systolic > settings.systolicUpper) {
+        parts.add('收缩压 ${systolic.toStringAsFixed(0)}');
+      }
+      if (diastolic != null && diastolic > settings.diastolicUpper) {
+        parts.add('舒张压 ${diastolic.toStringAsFixed(0)}');
+      }
+      if (parts.isNotEmpty) {
+        message = '${parts.join('、')} mmHg 超过设定值';
+      }
+    } else if (record.metric == HealthMetric.bodyTemperature &&
+        settings.temperatureEnabled) {
+      final value = record.values['value'];
+      if (value != null && value > settings.temperatureUpper) {
+        message =
+            '体温 ${value.toStringAsFixed(1)}℃，超过设定值 ${settings.temperatureUpper.toStringAsFixed(1)}℃';
+      }
+    }
+    if (message == null) return;
+    final alert = HealthWarningAlert(
+      id: record.id,
+      metric: record.metric,
+      title: '${record.metric.label}健康预警',
+      message: message,
+      triggeredAt: DateTime.now(),
+    );
+    healthWarningAlerts = [
+      alert,
+      ...healthWarningAlerts.where((item) => item.id != alert.id),
+    ].take(50).toList();
+    activeHealthWarningAlert = alert;
+  }
+
   Future<void> _refreshHealthRecordCache() async {
-    final recent = await _healthStore.recent();
-    final latest = await _healthStore.latestForEachMetric();
+    final storedRecent = await _healthStore.recent();
+    final storedLatest = await _healthStore.latestForEachMetric();
+    final invalidIds = [...storedRecent, ...storedLatest]
+        .where((record) => !hasSaneWearableTransportValues(record))
+        .map((record) => record.id)
+        .toSet();
+    if (invalidIds.isNotEmpty) await _healthStore.markInvalid(invalidIds);
+    final recent = storedRecent.where(hasSaneWearableTransportValues);
+    final latest = storedLatest.where(hasSaneWearableTransportValues);
     final byId = <String, HealthRecord>{
       for (final record in recent) record.id: record,
       for (final record in latest) record.id: record,
@@ -1501,6 +1900,7 @@ class AppController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _measurementTimeout?.cancel();
     _invalidateDeviceSync();
     unawaited(_wearableEvents?.cancel());
     unawaited(_deviceStates?.cancel());

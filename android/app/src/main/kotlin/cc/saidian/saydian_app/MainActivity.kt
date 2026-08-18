@@ -112,6 +112,7 @@ import com.veepoo.protocol.model.datas.weather.WeatherData
 import com.veepoo.protocol.model.datas.weather.WeatherEvery3Hour
 import com.veepoo.protocol.model.datas.weather.WeatherEveryDay
 import com.veepoo.protocol.model.enums.EBPDetectModel
+import com.veepoo.protocol.model.enums.EBPDetectStatus
 import com.veepoo.protocol.model.enums.EBloodComponentDetectState
 import com.veepoo.protocol.model.enums.EBloodGlucoseRiskLevel
 import com.veepoo.protocol.model.enums.EBloodGlucoseStatus
@@ -119,12 +120,15 @@ import com.veepoo.protocol.model.enums.DetectState
 import com.veepoo.protocol.model.enums.EAutoMeasureType
 import com.veepoo.protocol.model.enums.ECameraStatus
 import com.veepoo.protocol.model.enums.EContactOpt
+import com.veepoo.protocol.model.enums.EDeviceStatus
 import com.veepoo.protocol.model.enums.EFunctionStatus
 import com.veepoo.protocol.model.enums.EHealthAlarmType
+import com.veepoo.protocol.model.enums.EHeartStatus
 import com.veepoo.protocol.model.enums.EMultiAlarmOprate
 import com.veepoo.protocol.model.enums.EOprateStauts
 import com.veepoo.protocol.model.enums.EPwdStatus
 import com.veepoo.protocol.model.enums.ESex
+import com.veepoo.protocol.model.enums.ESPO2HStatus
 import com.veepoo.protocol.model.enums.ESportType
 import com.veepoo.protocol.model.enums.EWeatherOprateStatus
 import com.veepoo.protocol.model.enums.EWeatherType
@@ -136,6 +140,8 @@ import com.veepoo.protocol.model.settings.NightTurnWristSetting
 import com.veepoo.protocol.model.settings.ScreenSetting
 import com.veepoo.protocol.model.settings.TextAlarm2Setting
 import com.veepoo.protocol.model.settings.WeatherStatusSetting
+import com.veepoo.protocol.shareprence.SpUtil
+import com.veepoo.protocol.shareprence.SputilVari
 import com.veepoo.protocol.shareprence.VpSpGetUtil
 import com.veepoo.protocol.util.TextAlarmSp
 import io.flutter.embedding.android.FlutterActivity
@@ -283,6 +289,7 @@ class MainActivity : FlutterActivity() {
                             callback.unit(),
                         )
                     "disconnect" -> adapter.disconnect(callback.unit())
+                    "getDeviceDetails" -> callback.success(adapter.getDeviceDetails())
                     "getCapabilities" -> callback.success(adapter.getCapabilities())
                     "syncHealthData" -> adapter.syncHealthData(call.argument<String>("cursor"), callback)
                     "startMeasurement" ->
@@ -369,6 +376,7 @@ class MainActivity : FlutterActivity() {
             setOf(
                 "scanDevices",
                 "connect",
+                "getDeviceDetails",
                 "startSport",
                 "stopSport",
                 "readSportRecords",
@@ -600,9 +608,9 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         val connectedAddress =
             when {
                 sdkCurrentAddress.isNotBlank() &&
-                    manager.getConnectStatus(sdkCurrentAddress) == Constants.STATUS_CONNECTED ->
+                    manager.isDeviceConnected(sdkCurrentAddress) ->
                     sdkCurrentAddress
-                manager.getConnectStatus(deviceId) == Constants.STATUS_CONNECTED -> deviceId
+                manager.isDeviceConnected(deviceId) -> deviceId
                 else -> ""
             }
         if (connectedAddress.equals(deviceId, ignoreCase = true) &&
@@ -697,7 +705,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         remainingChecks: Int = STALE_DISCONNECT_CHECKS,
     ) {
         if (!isConnectionAttemptActive(generation, callback)) return
-        if (manager.getConnectStatus(addressToWait) != Constants.STATUS_CONNECTED) {
+        if (!manager.isDeviceConnected(addressToWait)) {
             startSdkConnection(generation, deviceId, advertisedName, profile, callback)
             return
         }
@@ -808,7 +816,14 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 override fun onPwdDataChange(data: PwdData) {
                     connectionHandler.post {
                         if (!isConnectionAttemptActive(generation, callback)) return@post
-                        firmwareVersion = data.deviceVersion.orEmpty()
+                        data.deviceVersion
+                            ?.trim()
+                            ?.takeIf(String::isNotEmpty)
+                            ?.let { firmwareVersion = it }
+                        Log.i(
+                            LOG_TAG,
+                            "Password state=${data.getmStatus()} firmwarePresent=${firmwareVersion.isNotBlank()}",
+                        )
                         if (data.getmStatus() in
                             setOf(EPwdStatus.CHECK_SUCCESS, EPwdStatus.CHECK_AND_TIME_SUCCESS) &&
                             passwordStarted.compareAndSet(false, true)
@@ -957,21 +972,39 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         deviceName: String,
     ) {
         if (!finishConnectionAttempt(generation, callback)) return
+        refreshFirmwareVersionFromSdkCache()
         connectingDeviceId = ""
         connectedDeviceId = deviceId
         connectedDeviceName = deviceName
-        emit(
-            "deviceDetails",
-            buildMap {
-                put("id", deviceId)
-                put("name", deviceName)
-                put("model", deviceName)
-                firmwareVersion.takeIf { it.isNotBlank() }?.let { put("firmwareVersion", it) }
-            },
-        )
+        emit("deviceDetails", deviceDetailsPayload(deviceId, deviceName))
         emit("state", mapOf("value" to "ready"))
         callback.success(Unit)
     }
+
+    private fun refreshFirmwareVersionFromSdkCache() {
+        if (firmwareVersion.isNotBlank()) return
+        val cached =
+            runCatching {
+                SpUtil.getString(
+                    appContext,
+                    SputilVari.INFO_DEVICE_VERSION_RELEASE,
+                    "",
+                ).orEmpty().trim()
+            }.getOrDefault("")
+        if (FIRMWARE_VERSION_PATTERN.matches(cached)) firmwareVersion = cached
+    }
+
+    private fun deviceDetailsPayload(
+        deviceId: String = connectedDeviceId,
+        deviceName: String = connectedDeviceName,
+    ): Map<String, Any?> =
+        buildMap {
+            put("id", deviceId)
+            put("name", deviceName.ifBlank { "Veepoo wearable" })
+            put("model", deviceName.ifBlank { "Veepoo" })
+            put("hardwareAddress", deviceId)
+            firmwareVersion.takeIf { it.isNotBlank() }?.let { put("firmwareVersion", it) }
+        }
 
     private fun failConnection(
         generation: Int,
@@ -1042,6 +1075,33 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 }
             }
         }
+    }
+
+    fun getDeviceDetails(): Map<String, Any?>? {
+        val deviceId = connectedDeviceId.trim()
+        if (deviceId.isEmpty()) return null
+        if (!runCatching { manager.isDeviceConnected(deviceId) }.getOrDefault(false)) {
+            clearStaleConnection(deviceId)
+            return null
+        }
+        refreshFirmwareVersionFromSdkCache()
+        return deviceDetailsPayload(deviceId)
+    }
+
+    private fun clearStaleConnection(deviceId: String) {
+        cancelActiveHealthSync(
+            "HEALTH_SYNC_CANCELLED",
+            "设备连接已断开，历史数据同步已取消",
+            emitError = false,
+        )
+        connectingDeviceId = ""
+        connectedDeviceId = ""
+        connectedDeviceName = ""
+        activeMetric = null
+        firmwareVersion = ""
+        releaseJLWatchFaceSession()
+        unregisterConnectStatusListener()
+        emit("disconnected", mapOf("deviceId" to deviceId))
     }
 
     fun getCapabilities(): Map<String, Any?> = capabilities
@@ -1194,18 +1254,91 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         }
         val completed = AtomicBoolean(false)
         val authenticationStarted = AtomicBoolean(false)
+        val rawFallbackStarted = AtomicBoolean(false)
+        var rawFallbackTimeout: Runnable? = null
+        lateinit var loadRawDialList: () -> Unit
         val timeout =
             Runnable {
-                if (completed.compareAndSet(false, true)) {
-                    Log.w(LOG_TAG, "JL watch-face session timed out")
-                    callback.error("READ_TIMEOUT", "表盘连接超时，请保持手表亮屏并靠近手机后重试")
-                }
+                if (completed.get()) return@Runnable
+                Log.w(LOG_TAG, "JL categorized watch-face read timed out; trying raw list")
+                loadRawDialList()
             }
         fun fail(code: String, message: String, cause: Any? = null) {
             if (!completed.compareAndSet(false, true)) return
             connectionHandler.removeCallbacks(timeout)
+            rawFallbackTimeout?.let(connectionHandler::removeCallbacks)
             Log.w(LOG_TAG, "JL watch-face session failed: $cause")
             callback.error(code, message)
+        }
+        loadRawDialList = {
+            if (!completed.get() && rawFallbackStarted.compareAndSet(false, true)) {
+                connectionHandler.removeCallbacks(timeout)
+                runCatching { JLWatchFaceManager.getInstance().release() }
+                    .onFailure { Log.w(LOG_TAG, "JL watch-face reader reset failed", it) }
+                emit(
+                    "deviceFeatureProgress",
+                    mapOf("feature" to "watch_faces", "progress" to 60),
+                )
+                val fallbackTimeout =
+                    Runnable {
+                        fail(
+                            "READ_TIMEOUT",
+                            "表盘连接超时，请保持手表亮屏并靠近手机后重试",
+                        )
+                    }
+                rawFallbackTimeout = fallbackTimeout
+                connectionHandler.postDelayed(
+                    fallbackTimeout,
+                    WATCH_FACE_RAW_FALLBACK_TIMEOUT_MS,
+                )
+                runCatching {
+                    WatchManager.getInstance().listWatchList(
+                        object : OnWatchOpCallback<java.util.ArrayList<FatFile>> {
+                            override fun onSuccess(result: java.util.ArrayList<FatFile>?) {
+                                connectionHandler.post {
+                                    if (!completed.compareAndSet(false, true)) return@post
+                                    rawFallbackTimeout?.let(connectionHandler::removeCallbacks)
+                                    val files = result.orEmpty()
+                                    val items =
+                                        files.mapIndexed { index, file ->
+                                            watchFacePayload(file, "other", index, "")
+                                        }
+                                    availableWatchFacePaths.clear()
+                                    files.mapTo(availableWatchFacePaths) { it.path }
+                                    emit(
+                                        "deviceFeatureProgress",
+                                        mapOf("feature" to "watch_faces", "progress" to 100),
+                                    )
+                                    callback.success(
+                                        mapOf(
+                                            "items" to items,
+                                            "hasPhotoWatchFace" to false,
+                                        ),
+                                    )
+                                }
+                            }
+
+                            override fun onFailed(error: BaseError) {
+                                connectionHandler.post {
+                                    fail(
+                                        "READ_FAILED",
+                                        "表盘读取失败，请保持手表靠近手机后重试",
+                                        error,
+                                    )
+                                }
+                            }
+                        },
+                    )
+                }.onFailure { error ->
+                    connectionHandler.post {
+                        fail(
+                            "READ_FAILED",
+                            "表盘读取失败，请保持手表靠近手机后重试",
+                            error,
+                        )
+                    }
+                }
+            }
         }
         lateinit var loadDialList: () -> Unit
         lateinit var authenticate: () -> Unit
@@ -1242,6 +1375,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                                     if (!currentReadFinished.compareAndSet(false, true)) return@post
                                     if (!completed.compareAndSet(false, true)) return@post
                                     connectionHandler.removeCallbacks(timeout)
+                                    rawFallbackTimeout?.let(connectionHandler::removeCallbacks)
                                     if (current != null) faceManager.currentFatFile = current
                                     val currentPath = current?.path.orEmpty()
                                     val items = mutableListOf<Map<String, Any?>>()
@@ -1332,7 +1466,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                         }
 
                         override fun onWatchDialInfoGetFailed(error: BaseError) {
-                            fail("READ_FAILED", "表盘读取失败，请保持手表靠近手机后重试", error)
+                            Log.w(LOG_TAG, "Categorized watch-face read failed; trying raw list: $error")
+                            connectionHandler.post { loadRawDialList() }
                         }
                     },
                 )
@@ -3741,31 +3876,101 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     }
 
     private fun onHeartData(data: HeartData) {
-        if (data.data > 0) emitRecord(record("heart_rate", mapOf("value" to data.data), "bpm", Date()))
+        if (data.heartStatus == EHeartStatus.STATE_HEART_NORMAL &&
+            data.data in 20..300 &&
+            claimMeasurementResult("heart_rate")
+        ) {
+            emitRecord(record("heart_rate", mapOf("value" to data.data), "bpm", Date()))
+            return
+        }
+        when (data.heartStatus) {
+            EHeartStatus.STATE_HEART_WEAR_ERROR ->
+                failMeasurement("heart_rate", "HEART_NOT_WORN", "请正确佩戴手表后重新测量心率")
+            EHeartStatus.STATE_HEART_BUSY ->
+                failMeasurement("heart_rate", "HEART_DEVICE_BUSY", "手表正在处理其他任务，请稍后重试")
+            EHeartStatus.STATE_LOW_BATTERY ->
+                failMeasurement("heart_rate", "HEART_LOW_BATTERY", "手表电量过低，充电后再测量")
+            else -> Unit
+        }
     }
 
     private fun onBloodPressureData(data: BpData) {
-        if (data.highPressure > 0 && data.lowPressure > 0) {
+        if (data.status == EBPDetectStatus.STATE_BP_NORMAL &&
+            data.progress >= 100 &&
+            data.highPressure in 60..300 &&
+            data.lowPressure in 20..200 &&
+            data.highPressure > data.lowPressure &&
+            claimMeasurementResult("blood_pressure")
+        ) {
             emitRecord(record("blood_pressure", mapOf("systolic" to data.highPressure, "diastolic" to data.lowPressure), "mmHg", Date()))
+            return
+        }
+        if (data.status != EBPDetectStatus.STATE_BP_NORMAL) {
+            val message =
+                when (data.status) {
+                    EBPDetectStatus.STATE_BP_WEAR_OFF -> "请正确佩戴手表后重新测量血压"
+                    EBPDetectStatus.STATE_BP_LOW_BATTERY -> "手表电量过低，充电后再测量"
+                    EBPDetectStatus.STATE_BP_CHARGING -> "手表充电时无法测量血压"
+                    else -> "手表正在处理其他任务，请稍后重试"
+                }
+            failMeasurement("blood_pressure", "BLOOD_PRESSURE_FAILED", message)
+        } else if (data.progress >= 100) {
+            failMeasurement("blood_pressure", "BLOOD_PRESSURE_INVALID", "本次血压结果无效，请保持静止后重试")
         }
     }
 
     private fun onOxygenData(data: Spo2hData) {
-        if (data.value > 0) emitRecord(record("blood_oxygen", mapOf("value" to data.value), "%", Date()))
+        if (data.spState == ESPO2HStatus.OPEN &&
+            data.deviceState == EDeviceStatus.FREE &&
+            data.value in 2..100 &&
+            (!data.isChecking || data.checkingProgress >= 100) &&
+            claimMeasurementResult("blood_oxygen")
+        ) {
+            emitRecord(record("blood_oxygen", mapOf("value" to data.value), "%", Date()))
+            return
+        }
+        when {
+            data.spState == ESPO2HStatus.NOT_SUPPORT ->
+                failMeasurement("blood_oxygen", "OXYGEN_UNSUPPORTED", "当前手表不支持血氧测量")
+            data.deviceState == EDeviceStatus.UNPASS_WEAR ->
+                failMeasurement("blood_oxygen", "OXYGEN_NOT_WORN", "请正确佩戴手表后重新测量血氧")
+            data.deviceState in setOf(EDeviceStatus.BUSY, EDeviceStatus.CHARGING, EDeviceStatus.CHARG_LOW) ->
+                failMeasurement("blood_oxygen", "OXYGEN_DEVICE_BUSY", "手表当前无法测量血氧，请稍后重试")
+        }
     }
 
     private fun onTemperatureData(data: TemptureDetectData) {
-        if (data.tempture > 0) emitRecord(record("body_temperature", mapOf("value" to data.tempture), "℃", Date()))
+        if (data.oprate == 1 &&
+            data.deviceState == 0 &&
+            data.progress >= 100 &&
+            data.tempture in 20.0f..45.0f &&
+            claimMeasurementResult("body_temperature")
+        ) {
+            emitRecord(record("body_temperature", mapOf("value" to data.tempture), "℃", Date()))
+            return
+        }
+        when {
+            data.oprate == 0 ->
+                failMeasurement("body_temperature", "TEMPERATURE_UNSUPPORTED", "当前手表不支持体温测量")
+            data.deviceState == 8 ->
+                failMeasurement("body_temperature", "TEMPERATURE_LOW_BATTERY", "手表电量过低，充电后再测量")
+            data.deviceState == 9 ->
+                failMeasurement("body_temperature", "TEMPERATURE_SENSOR_ERROR", "体温传感器暂时不可用，请重新佩戴后重试")
+            data.deviceState in 1..7 ->
+                failMeasurement("body_temperature", "TEMPERATURE_DEVICE_BUSY", "手表正在处理其他任务，请稍后重试")
+        }
     }
 
     private val bloodGlucoseListener =
         object : IBloodGlucoseChangeListener {
             override fun onDetectError(progress: Int, status: EBloodGlucoseStatus) {
-                emit("error", mapOf("code" to "GLUCOSE_MEASUREMENT_FAILED", "message" to "血糖测量未完成"))
+                failMeasurement("blood_glucose", "GLUCOSE_MEASUREMENT_FAILED", "血糖测量未完成")
             }
 
             override fun onBloodGlucoseDetect(progress: Int, value: Float, risk: EBloodGlucoseRiskLevel) {
-                if (value > 0) emitRecord(record("blood_glucose", mapOf("value" to value), "mmol/L", Date()))
+                if (progress >= 100 && value > 0 && claimMeasurementResult("blood_glucose")) {
+                    emitRecord(record("blood_glucose", mapOf("value" to value), "mmol/L", Date()))
+                }
             }
 
             override fun onBloodGlucoseStopDetect() = Unit
@@ -3791,11 +3996,13 @@ private class VeepooWearableAdapter(context: android.content.Context) {
 
             override fun onDetectSuccess(data: BodyComponent) {
                 val values = bodyComponentValues(data)
-                if (values.isNotEmpty()) emitRecord(record("body_composition", values, "", Date()))
+                if (values.isNotEmpty() && claimMeasurementResult("body_composition")) {
+                    emitRecord(record("body_composition", values, "", Date()))
+                }
             }
 
             override fun onDetectFailed(state: DetectState) {
-                emit("error", mapOf("code" to "BODY_COMPOSITION_FAILED", "message" to "身体成分测量未完成"))
+                failMeasurement("body_composition", "BODY_COMPOSITION_FAILED", "身体成分测量未完成")
             }
 
             override fun onDetectStop() = Unit
@@ -3804,7 +4011,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     private val bloodComponentListener =
         object : IBloodComponentDetectListener {
             override fun onDetectFailed(state: EBloodComponentDetectState) {
-                emit("error", mapOf("code" to "BLOOD_COMPONENT_FAILED", "message" to "血液成分测量未完成"))
+                failMeasurement("blood_composition", "BLOOD_COMPONENT_FAILED", "血液成分测量未完成")
             }
 
             override fun onDetecting(progress: Int, data: BloodComponent) = Unit
@@ -3812,7 +4019,9 @@ private class VeepooWearableAdapter(context: android.content.Context) {
 
             override fun onDetectComplete(data: BloodComponent) {
                 val values = bloodComponentValues(data)
-                if (values.isNotEmpty()) emitRecord(record("blood_composition", values, "", Date()))
+                if (values.isNotEmpty() && claimMeasurementResult("blood_composition")) {
+                    emitRecord(record("blood_composition", values, "", Date()))
+                }
             }
         }
 
@@ -3823,24 +4032,91 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             override fun onEcgDetectStateChange(state: EcgDetectState) = Unit
 
             override fun onEcgDetectResultChange(result: EcgDetectResult) {
-                if (!result.isSuccess) return
+                if (!result.isSuccess) {
+                    failMeasurement("ecg", "ECG_MEASUREMENT_FAILED", "心电测量未完成，请保持接触电极后重试")
+                    return
+                }
                 val values = buildMap<String, Number> {
                     if (result.aveHeart > 0) put("meanHeartRate", result.aveHeart)
                     if (result.aveHrv > 0) put("averageHRV", result.aveHrv)
                     if (result.aveQT > 0) put("averageTimeInterval", result.aveQT)
                 }
-                if (values.isNotEmpty()) {
-                    val samples = result.filterSignals?.toList().orEmpty().ifEmpty { activeEcgSamples }
+                if (values.isNotEmpty() && claimMeasurementResult("ecg")) {
+                    val samples =
+                        result.filterSignals
+                            ?.toList()
+                            .orEmpty()
+                            .ifEmpty { activeEcgSamples }
+                            .filter { it.toLong() != Int.MAX_VALUE.toLong() }
                     emitRecord(record("ecg", values, "", Date(), samples))
                 }
             }
 
-            override fun onEcgDetectDiagnosisChange(diagnosis: EcgDiagnosis) = Unit
+            override fun onEcgDetectDiagnosisChange(diagnosis: EcgDiagnosis) {
+                if (!diagnosis.isSuccess) {
+                    failMeasurement("ecg", "ECG_MEASUREMENT_FAILED", "心电测量未完成，请保持接触电极后重试")
+                    return
+                }
+                val values = buildMap<String, Number> {
+                    if (diagnosis.heartRate > 0) put("meanHeartRate", diagnosis.heartRate)
+                    if (diagnosis.hrv > 0) put("averageHRV", diagnosis.hrv)
+                    if (diagnosis.qtTime > 0) put("averageTimeInterval", diagnosis.qtTime)
+                }
+                if (values.isNotEmpty() && claimMeasurementResult("ecg")) {
+                    val samples =
+                        diagnosis.filterSignals
+                            ?.toList()
+                            .orEmpty()
+                            .ifEmpty { activeEcgSamples }
+                            .filter { it.toLong() != Int.MAX_VALUE.toLong() }
+                    emitRecord(record("ecg", values, "", Date(), samples))
+                }
+            }
 
-            override fun onEcgADCChange(origin: IntArray, filtered: IntArray) {
-                activeEcgSamples += (if (filtered.isNotEmpty()) filtered else origin).toList()
+            override fun onEcgADCChange(data: IntArray, power: IntArray) {
+                activeEcgSamples +=
+                    data.filter { it != Int.MAX_VALUE }
             }
         }
+
+    private fun claimMeasurementResult(metric: String): Boolean =
+        synchronized(this) {
+            if (activeMetric != metric) {
+                false
+            } else {
+                activeMetric = null
+                true
+            }
+        }
+
+    private fun failMeasurement(
+        metric: String,
+        code: String,
+        message: String,
+    ) {
+        if (claimMeasurementResult(metric)) {
+            stopFailedMeasurement(metric)
+            emit("error", mapOf("code" to code, "message" to message))
+        }
+    }
+
+    private fun stopFailedMeasurement(metric: String) {
+        val ignored = IBleWriteResponse { }
+        runCatching {
+            when (metric) {
+                "heart_rate" -> manager.stopDetectHeart(ignored)
+                "blood_pressure" -> manager.stopDetectBP(ignored, EBPDetectModel.DETECT_MODEL_PUBLIC)
+                "blood_oxygen" -> manager.stopDetectSPO2H(ignored, ISpo2hDataListener { })
+                "body_temperature" -> manager.stopDetectTempture(ignored, ITemptureDetectDataListener { })
+                "blood_glucose" -> manager.stopBloodGlucoseDetect(ignored, bloodGlucoseListener)
+                "body_composition" -> manager.stopDetectBodyComponent(ignored)
+                "blood_composition" -> manager.stopDetectBloodComponent(ignored)
+                "ecg" -> manager.stopDetectECG(ignored, true, ecgListener)
+            }
+        }.onFailure { error ->
+            Log.w(LOG_TAG, "Failed to stop $metric after terminal measurement error", error)
+        }
+    }
 
     private fun bodyComponentValues(data: BodyComponent): Map<String, Number> =
         buildMap {
@@ -3865,7 +4141,10 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     private fun measurementWrite(callback: ResultCallback<Unit>) =
         IBleWriteResponse { code ->
             if (code == Code.REQUEST_SUCCESS) callback.success(Unit)
-            else callback.error("MEASUREMENT_COMMAND_FAILED", "暂时无法开始测量，请稍后重试")
+            else {
+                synchronized(this) { activeMetric = null }
+                callback.error("MEASUREMENT_COMMAND_FAILED", "暂时无法开始测量，请稍后重试")
+            }
         }
 
     private fun writeResponse(callback: ResultCallback<*>, message: String) =
@@ -3900,8 +4179,14 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     }
 
     private fun ensureConnected(callback: ResultCallback<*>): Unit? {
-        if (connectedDeviceId.isBlank()) {
+        val deviceId = connectedDeviceId.trim()
+        if (deviceId.isBlank()) {
             callback.error("NOT_CONNECTED", "请先连接赛电设备")
+            return null
+        }
+        if (!runCatching { manager.isDeviceConnected(deviceId) }.getOrDefault(false)) {
+            clearStaleConnection(deviceId)
+            callback.error("CONNECTION_DROPPED", "设备连接已断开，请重新连接")
             return null
         }
         return Unit
@@ -4095,6 +4380,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
 
     companion object {
         private const val LOG_TAG = "SaidianVeepoo"
+        private val FIRMWARE_VERSION_PATTERN = Regex("^[0-9A-Fa-f]{2}(\\.[0-9A-Fa-f]{2}){2}$")
         private const val PERSON_SYNC_TIMEOUT_MS = 8_000L
         private const val CONNECTION_FLOW_TIMEOUT_MS = 180_000L
         private const val HEALTH_SYNC_IDLE_TIMEOUT_MS = 45_000L
@@ -4104,6 +4390,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         private const val ALARM_WRITE_VERIFY_DELAY_MS = 1_200L
         private const val MAX_ALARM_LABEL_LENGTH = 20
         private const val WATCH_FACE_READ_TIMEOUT_MS = 45_000L
+        private const val WATCH_FACE_RAW_FALLBACK_TIMEOUT_MS = 15_000L
         private const val WATCH_FACE_CURRENT_READ_DELAY_MS = 200L
         private const val WATCH_FACE_CURRENT_READ_TIMEOUT_MS = 8_000L
         private const val JL_REQUESTED_MTU = 247

@@ -16,6 +16,76 @@ class SaydianApp extends StatelessWidget {
       title: 'Saydian 赛电',
       debugShowCheckedModeBanner: false,
       theme: buildSaydianTheme(),
+      builder: (context, child) => ListenableBuilder(
+        listenable: controller,
+        builder: (context, _) {
+          final alert = controller.activeHealthWarningAlert;
+          return Stack(
+            children: [
+              child ?? const SizedBox.shrink(),
+              if (alert != null)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  top: MediaQuery.paddingOf(context).top + 10,
+                  child: Material(
+                    key: const Key('global-health-warning'),
+                    elevation: 10,
+                    color: const Color(0xFFFFF1EE),
+                    borderRadius: BorderRadius.circular(16),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Padding(
+                            padding: EdgeInsets.only(top: 2),
+                            child: Icon(
+                              Icons.warning_amber_rounded,
+                              color: SaydianColors.danger,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  alert.title,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w900,
+                                    color: SaydianColors.danger,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(alert.message),
+                                const SizedBox(height: 3),
+                                const Text(
+                                  '请休息后复测；如有明显不适，请及时咨询医务人员。',
+                                  style: TextStyle(fontSize: 13),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Semantics(
+                            button: true,
+                            label: '关闭健康预警',
+                            child: IconButton(
+                              key: const Key('dismiss-health-warning'),
+                              onPressed: controller.dismissHealthWarningAlert,
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
       home: ListenableBuilder(
         listenable: controller,
         builder: (context, _) {

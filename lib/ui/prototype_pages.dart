@@ -31,19 +31,55 @@ class RegistrationPage extends StatefulWidget {
 
 class _RegistrationPageState extends State<RegistrationPage> {
   final _mobile = TextEditingController();
+  final _code = TextEditingController();
   final _password = TextEditingController();
   final _confirmation = TextEditingController();
   final _distributor = TextEditingController();
   bool _accepted = false;
   bool _obscure = true;
+  bool _sendingCode = false;
+  int _codeCountdown = 0;
+  Timer? _codeTimer;
 
   @override
   void dispose() {
     _mobile.dispose();
+    _code.dispose();
     _password.dispose();
     _confirmation.dispose();
     _distributor.dispose();
+    _codeTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _sendCode() async {
+    final mobile = _mobile.text.trim();
+    if (!RegExp(r'^1\d{10}$').hasMatch(mobile)) {
+      _message('请输入正确的中国大陆手机号');
+      return;
+    }
+    setState(() => _sendingCode = true);
+    final success = await widget.controller.sendSmsCode(
+      mobile: mobile,
+      usage: 'register',
+    );
+    if (!mounted) return;
+    setState(() => _sendingCode = false);
+    if (!success) {
+      _message(widget.controller.errorMessage ?? '验证码发送失败，请稍后重试');
+      return;
+    }
+    _message('验证码已发送，请注意查收');
+    _codeTimer?.cancel();
+    setState(() => _codeCountdown = 60);
+    _codeTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted || _codeCountdown <= 1) {
+        timer.cancel();
+        if (mounted) setState(() => _codeCountdown = 0);
+      } else {
+        setState(() => _codeCountdown--);
+      }
+    });
   }
 
   Future<void> _submit() async {
@@ -56,6 +92,10 @@ class _RegistrationPageState extends State<RegistrationPage> {
       _message('密码至少需要 6 位');
       return;
     }
+    if (!RegExp(r'^\d{4,6}$').hasMatch(_code.text.trim())) {
+      _message('请输入收到的短信验证码');
+      return;
+    }
     if (_password.text != _confirmation.text) {
       _message('两次输入的密码不一致');
       return;
@@ -64,7 +104,11 @@ class _RegistrationPageState extends State<RegistrationPage> {
       _message('请先阅读并同意用户协议与隐私政策');
       return;
     }
-    final success = await widget.controller.register(mobile, _password.text);
+    final success = await widget.controller.register(
+      mobile,
+      _password.text,
+      code: _code.text,
+    );
     if (!mounted) return;
     if (success) {
       Navigator.of(context).popUntil((route) => route.isFirst);
@@ -94,6 +138,44 @@ class _RegistrationPageState extends State<RegistrationPage> {
               controller: _mobile,
               keyboardType: TextInputType.phone,
               decoration: const InputDecoration(labelText: '手机号'),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextField(
+                    key: const Key('registration-code'),
+                    controller: _code,
+                    keyboardType: TextInputType.number,
+                    maxLength: 6,
+                    decoration: const InputDecoration(
+                      labelText: '短信验证码',
+                      counterText: '',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  height: 56,
+                  child: OutlinedButton(
+                    key: const Key('registration-send-code'),
+                    onPressed:
+                        _sendingCode ||
+                            _codeCountdown > 0 ||
+                            widget.controller.isBusy
+                        ? null
+                        : _sendCode,
+                    child: Text(
+                      _sendingCode
+                          ? '发送中'
+                          : _codeCountdown > 0
+                          ? '${_codeCountdown}s'
+                          : '获取验证码',
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             TextField(
@@ -156,7 +238,9 @@ class _RegistrationPageState extends State<RegistrationPage> {
 }
 
 class PasswordRecoveryPage extends StatefulWidget {
-  const PasswordRecoveryPage({super.key});
+  const PasswordRecoveryPage({this.controller, super.key});
+
+  final AppController? controller;
 
   @override
   State<PasswordRecoveryPage> createState() => _PasswordRecoveryPageState();
@@ -164,20 +248,88 @@ class PasswordRecoveryPage extends StatefulWidget {
 
 class _PasswordRecoveryPageState extends State<PasswordRecoveryPage> {
   final _mobile = TextEditingController();
+  final _code = TextEditingController();
+  final _password = TextEditingController();
+  final _confirmation = TextEditingController();
   String? _message;
+  bool _obscure = true;
+  bool _sendingCode = false;
+  int _codeCountdown = 0;
+  Timer? _codeTimer;
 
   @override
   void dispose() {
     _mobile.dispose();
+    _code.dispose();
+    _password.dispose();
+    _confirmation.dispose();
+    _codeTimer?.cancel();
     super.dispose();
   }
 
-  void _continue() {
-    if (!RegExp(r'^1\d{10}$').hasMatch(_mobile.text.trim())) {
+  Future<void> _sendCode() async {
+    final controller = widget.controller;
+    if (controller == null) {
+      setState(() => _message = '短信服务暂时无法使用，请稍后再试');
+      return;
+    }
+    final mobile = _mobile.text.trim();
+    if (!RegExp(r'^1\d{10}$').hasMatch(mobile)) {
       setState(() => _message = '请输入正确的中国大陆手机号');
       return;
     }
-    setState(() => _message = '此功能暂时无法使用，请稍后再试');
+    setState(() {
+      _sendingCode = true;
+      _message = null;
+    });
+    final success = await controller.sendSmsCode(
+      mobile: mobile,
+      usage: 'up-pwd',
+    );
+    if (!mounted) return;
+    setState(() {
+      _sendingCode = false;
+      _message = success
+          ? '验证码已发送，请注意查收'
+          : controller.errorMessage ?? '验证码发送失败，请稍后重试';
+    });
+    if (!success) return;
+    _codeTimer?.cancel();
+    setState(() => _codeCountdown = 60);
+    _codeTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted || _codeCountdown <= 1) {
+        timer.cancel();
+        if (mounted) setState(() => _codeCountdown = 0);
+      } else {
+        setState(() => _codeCountdown--);
+      }
+    });
+  }
+
+  Future<void> _submit() async {
+    final controller = widget.controller;
+    if (controller == null) {
+      setState(() => _message = '找回密码服务暂时无法使用，请稍后再试');
+      return;
+    }
+    if (_password.text != _confirmation.text) {
+      setState(() => _message = '两次输入的新密码不一致');
+      return;
+    }
+    final success = await controller.resetPassword(
+      mobile: _mobile.text,
+      code: _code.text,
+      password: _password.text,
+    );
+    if (!mounted) return;
+    if (success) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('密码已重置，并已自动登录')));
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    } else {
+      setState(() => _message = controller.errorMessage ?? '密码重置失败，请稍后重试');
+    }
   }
 
   @override
@@ -211,6 +363,69 @@ class _PasswordRecoveryPageState extends State<PasswordRecoveryPage> {
             keyboardType: TextInputType.phone,
             decoration: const InputDecoration(labelText: '手机号'),
           ),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: TextField(
+                  key: const Key('password-recovery-code'),
+                  controller: _code,
+                  keyboardType: TextInputType.number,
+                  maxLength: 6,
+                  decoration: const InputDecoration(
+                    labelText: '短信验证码',
+                    counterText: '',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              SizedBox(
+                height: 56,
+                child: OutlinedButton(
+                  key: const Key('password-recovery-send-code'),
+                  onPressed:
+                      _sendingCode ||
+                          _codeCountdown > 0 ||
+                          (widget.controller?.isBusy ?? false)
+                      ? null
+                      : _sendCode,
+                  child: Text(
+                    _sendingCode
+                        ? '发送中'
+                        : _codeCountdown > 0
+                        ? '${_codeCountdown}s'
+                        : '获取验证码',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('password-recovery-password'),
+            controller: _password,
+            obscureText: _obscure,
+            decoration: InputDecoration(
+              labelText: '新密码',
+              helperText: '至少 6 位',
+              suffixIcon: IconButton(
+                onPressed: () => setState(() => _obscure = !_obscure),
+                icon: Icon(
+                  _obscure
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('password-recovery-confirmation'),
+            controller: _confirmation,
+            obscureText: _obscure,
+            decoration: const InputDecoration(labelText: '确认新密码'),
+          ),
           if (_message != null) ...[
             const SizedBox(height: 14),
             FeatureStateCard(
@@ -219,7 +434,11 @@ class _PasswordRecoveryPageState extends State<PasswordRecoveryPage> {
             ),
           ],
           const SizedBox(height: 20),
-          FilledButton(onPressed: _continue, child: const Text('下一步')),
+          FilledButton(
+            key: const Key('password-recovery-submit'),
+            onPressed: widget.controller?.isBusy == true ? null : _submit,
+            child: const Text('重置密码'),
+          ),
         ],
       ),
     );
@@ -236,9 +455,27 @@ class HealthWarningPage extends StatefulWidget {
 }
 
 class _HealthWarningPageState extends State<HealthWarningPage> {
+  late bool _heartRateEnabled;
+  late bool _bloodPressureEnabled;
+  late bool _temperatureEnabled;
+  late final TextEditingController _heartRateUpper;
+  late final TextEditingController _systolicUpper;
+  late final TextEditingController _diastolicUpper;
+  late final TextEditingController _temperatureUpper;
+
   @override
   void initState() {
     super.initState();
+    final settings = widget.controller.healthWarningSettings;
+    _heartRateEnabled = settings.heartRateEnabled;
+    _bloodPressureEnabled = settings.bloodPressureEnabled;
+    _temperatureEnabled = settings.temperatureEnabled;
+    _heartRateUpper = TextEditingController(text: '${settings.heartRateUpper}');
+    _systolicUpper = TextEditingController(text: '${settings.systolicUpper}');
+    _diastolicUpper = TextEditingController(text: '${settings.diastolicUpper}');
+    _temperatureUpper = TextEditingController(
+      text: settings.temperatureUpper.toStringAsFixed(1),
+    );
     widget.controller.addListener(_refresh);
     widget.controller.refreshNotifications();
   }
@@ -246,11 +483,50 @@ class _HealthWarningPageState extends State<HealthWarningPage> {
   @override
   void dispose() {
     widget.controller.removeListener(_refresh);
+    _heartRateUpper.dispose();
+    _systolicUpper.dispose();
+    _diastolicUpper.dispose();
+    _temperatureUpper.dispose();
     super.dispose();
   }
 
   void _refresh() {
     if (mounted) setState(() {});
+  }
+
+  Future<void> _saveSettings() async {
+    final heartRate = int.tryParse(_heartRateUpper.text.trim());
+    final systolic = int.tryParse(_systolicUpper.text.trim());
+    final diastolic = int.tryParse(_diastolicUpper.text.trim());
+    final temperature = double.tryParse(_temperatureUpper.text.trim());
+    if (heartRate == null ||
+        systolic == null ||
+        diastolic == null ||
+        temperature == null) {
+      _message('请填写正确的报警数值');
+      return;
+    }
+    final success = await widget.controller.saveHealthWarningSettings(
+      HealthWarningSettings(
+        heartRateEnabled: _heartRateEnabled,
+        heartRateUpper: heartRate,
+        bloodPressureEnabled: _bloodPressureEnabled,
+        systolicUpper: systolic,
+        diastolicUpper: diastolic,
+        temperatureEnabled: _temperatureEnabled,
+        temperatureUpper: temperature,
+      ),
+    );
+    if (!mounted) return;
+    _message(
+      success ? '健康预警设置已保存' : widget.controller.errorMessage ?? '保存失败，请稍后重试',
+    );
+  }
+
+  void _message(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   bool _isExplicitHealthWarning(Map<String, Object?> item) {
@@ -266,6 +542,27 @@ class _HealthWarningPageState extends State<HealthWarningPage> {
         type.contains('预警');
   }
 
+  String _warningStatus(Map<String, Object?> item) {
+    final raw =
+        [
+              item['status_text'],
+              item['level_text'],
+              item['status_label'],
+              item['level'],
+            ]
+            .whereType<Object>()
+            .map((value) => '$value'.trim())
+            .firstWhere(
+              (value) => value.isNotEmpty && int.tryParse(value) == null,
+              orElse: () => '',
+            );
+    final normalized = raw.toLowerCase();
+    if (normalized.contains('high') || raw.contains('高')) return '偏高';
+    if (normalized.contains('low') || raw.contains('低')) return '偏低';
+    if (normalized.contains('abnormal') || raw.contains('异常')) return '异常';
+    return raw.isEmpty ? '异常提醒' : raw;
+  }
+
   @override
   Widget build(BuildContext context) {
     final warnings = widget.controller.notifications
@@ -277,6 +574,112 @@ class _HealthWarningPageState extends State<HealthWarningPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          const FeatureStateCard(
+            message: '设置健康数据上限提醒',
+            detail: '开关开启后，新测量值超过你设置的上限时，会在 APP 全局显示醒目提示。',
+            icon: Icons.notifications_active_outlined,
+            color: SaydianColors.orange,
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 14),
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    key: const Key('warning-heart-rate-switch'),
+                    value: _heartRateEnabled,
+                    onChanged: (value) =>
+                        setState(() => _heartRateEnabled = value),
+                    title: const Text('心率报警'),
+                    subtitle: const Text('超过设定心率时提示'),
+                    secondary: const Icon(Icons.favorite_rounded),
+                  ),
+                  if (_heartRateEnabled)
+                    _WarningThresholdField(
+                      key: const Key('warning-heart-rate-threshold'),
+                      label: '心率上限',
+                      controller: _heartRateUpper,
+                      unit: 'bpm',
+                    ),
+                  const Divider(height: 12),
+                  SwitchListTile(
+                    key: const Key('warning-blood-pressure-switch'),
+                    value: _bloodPressureEnabled,
+                    onChanged: (value) =>
+                        setState(() => _bloodPressureEnabled = value),
+                    title: const Text('血压报警'),
+                    subtitle: const Text('收缩压或舒张压超过设定值时提示'),
+                    secondary: const Icon(Icons.bloodtype_outlined),
+                  ),
+                  if (_bloodPressureEnabled) ...[
+                    _WarningThresholdField(
+                      key: const Key('warning-systolic-threshold'),
+                      label: '收缩压上限',
+                      controller: _systolicUpper,
+                      unit: 'mmHg',
+                    ),
+                    const SizedBox(height: 10),
+                    _WarningThresholdField(
+                      key: const Key('warning-diastolic-threshold'),
+                      label: '舒张压上限',
+                      controller: _diastolicUpper,
+                      unit: 'mmHg',
+                    ),
+                  ],
+                  const Divider(height: 12),
+                  SwitchListTile(
+                    key: const Key('warning-temperature-switch'),
+                    value: _temperatureEnabled,
+                    onChanged: (value) =>
+                        setState(() => _temperatureEnabled = value),
+                    title: const Text('体温报警'),
+                    subtitle: const Text('超过设定体温时提示'),
+                    secondary: const Icon(Icons.thermostat_rounded),
+                  ),
+                  if (_temperatureEnabled)
+                    _WarningThresholdField(
+                      key: const Key('warning-temperature-threshold'),
+                      label: '体温上限',
+                      controller: _temperatureUpper,
+                      unit: '℃',
+                      decimal: true,
+                    ),
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: FilledButton.icon(
+                      key: const Key('warning-save'),
+                      onPressed: _saveSettings,
+                      icon: const Icon(Icons.save_outlined),
+                      label: const Text('保存预警设置'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          const Text(
+            '预警记录',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 10),
+          for (final alert in widget.controller.healthWarningAlerts)
+            Card(
+              margin: const EdgeInsets.only(bottom: 10),
+              child: ListTile(
+                leading: const Icon(
+                  Icons.warning_amber_rounded,
+                  color: SaydianColors.danger,
+                ),
+                title: Text(alert.title),
+                subtitle: Text(alert.message),
+                trailing: Text(
+                  TimeOfDay.fromDateTime(alert.triggeredAt).format(context),
+                ),
+              ),
+            ),
           if (loading)
             const Center(
               child: Padding(
@@ -284,7 +687,8 @@ class _HealthWarningPageState extends State<HealthWarningPage> {
                 child: CircularProgressIndicator(),
               ),
             )
-          else if (warnings.isEmpty)
+          else if (warnings.isEmpty &&
+              widget.controller.healthWarningAlerts.isEmpty)
             FeatureStateCard(
               message: '当前暂无健康预警',
               detail:
@@ -309,10 +713,37 @@ class _HealthWarningPageState extends State<HealthWarningPage> {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  subtitle: Text(
-                    '${warning['content'] ?? warning['message'] ?? warning['created_at'] ?? '服务端已上报'}',
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
+                  subtitle: Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.warning_amber_rounded,
+                              size: 18,
+                              color: SaydianColors.orange,
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              _warningStatus(warning),
+                              style: const TextStyle(
+                                color: SaydianColors.ink,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          '${warning['content'] ?? warning['message'] ?? warning['created_at'] ?? '服务端已上报'}',
+                          maxLines: 4,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -322,6 +753,43 @@ class _HealthWarningPageState extends State<HealthWarningPage> {
             detail: '手表测量结果用于日常健康管理参考。',
             icon: Icons.medical_information_outlined,
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WarningThresholdField extends StatelessWidget {
+  const _WarningThresholdField({
+    required this.label,
+    required this.controller,
+    required this.unit,
+    this.decimal = false,
+    super.key,
+  });
+
+  final String label;
+  final TextEditingController controller;
+  final String unit;
+  final bool decimal;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(
+        children: [
+          Expanded(child: Text(label)),
+          SizedBox(
+            width: 112,
+            child: TextField(
+              controller: controller,
+              keyboardType: TextInputType.numberWithOptions(decimal: decimal),
+              textAlign: TextAlign.center,
+              decoration: const InputDecoration(isDense: true),
+            ),
+          ),
+          SizedBox(width: 62, child: Text(unit, textAlign: TextAlign.end)),
         ],
       ),
     );
@@ -1217,7 +1685,7 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
         const Text(
           '传送时请保持手表靠近手机，并避免切换到其他页面。',
           textAlign: TextAlign.center,
-          style: TextStyle(color: SaydianColors.muted, fontSize: 12),
+          style: TextStyle(color: SaydianColors.muted, fontSize: 14),
         ),
       ],
     );
@@ -1555,7 +2023,7 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
           Text(
             _weatherMessage!,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: SaydianColors.muted, fontSize: 12),
+            style: const TextStyle(color: SaydianColors.muted, fontSize: 14),
           ),
         ],
       ],
@@ -2198,7 +2666,7 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
         const Text(
           '辅助评估仅供日常健康管理参考，不用于诊断或治疗。',
           textAlign: TextAlign.center,
-          style: TextStyle(color: SaydianColors.muted, fontSize: 12),
+          style: TextStyle(color: SaydianColors.muted, fontSize: 14),
         ),
       ],
     );
@@ -2435,7 +2903,7 @@ class _DeviceFeatureHeader extends StatelessWidget {
                   _deviceFeatureDescription(feature),
                   style: const TextStyle(
                     color: SaydianColors.muted,
-                    fontSize: 12,
+                    fontSize: 14,
                     height: 1.4,
                   ),
                 ),
@@ -3193,7 +3661,9 @@ String _aboutPlainText(String raw) => raw
     .trim();
 
 class SecurityCenterPage extends StatelessWidget {
-  const SecurityCenterPage({super.key});
+  const SecurityCenterPage({required this.controller, super.key});
+
+  final AppController controller;
 
   @override
   Widget build(BuildContext context) {
@@ -3208,7 +3678,8 @@ class SecurityCenterPage extends StatelessWidget {
                 ListTile(
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
-                      builder: (_) => const PasswordRecoveryPage(),
+                      builder: (_) =>
+                          PasswordRecoveryPage(controller: controller),
                     ),
                   ),
                   leading: const Icon(Icons.password_rounded),

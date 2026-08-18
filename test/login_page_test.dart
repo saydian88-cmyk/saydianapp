@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:saydian_app/app.dart';
 import 'package:saydian_app/domain/feature_models.dart';
 import 'package:saydian_app/domain/models.dart';
 import 'package:saydian_app/services/api_client.dart';
@@ -9,7 +10,9 @@ import 'package:saydian_app/services/app_controller.dart';
 import 'package:saydian_app/services/local_health_store.dart';
 import 'package:saydian_app/services/secure_vault.dart';
 import 'package:saydian_app/services/wearable_bridge.dart';
+import 'package:saydian_app/ui/app_theme.dart';
 import 'package:saydian_app/ui/pages.dart';
+import 'package:saydian_app/ui/prototype_pages.dart';
 
 void main() {
   testWidgets('login page renders the required account and privacy controls', (
@@ -21,15 +24,150 @@ void main() {
       MemoryHealthStore(),
       _NoopWearable(),
     );
+    addTearDown(controller.dispose);
 
     await tester.pumpWidget(
-      MaterialApp(home: LoginPage(controller: controller)),
+      MaterialApp(
+        theme: buildSaydianTheme(),
+        home: LoginPage(controller: controller),
+      ),
     );
 
     expect(find.text('欢迎使用 Saydian 赛电'), findsNothing);
     expect(find.byType(TextField), findsNWidgets(2));
     expect(find.textContaining('不用于诊断或治疗'), findsNothing);
     expect(find.textContaining('隐私政策'), findsWidgets);
+  });
+
+  testWidgets(
+    'agreement remains visible and tappable at 320x568 and 1.5x text',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(320, 568));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final controller = AppController(
+        MemorySessionVault(),
+        _NoopApi(),
+        MemoryHealthStore(),
+        _NoopWearable(),
+      );
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildSaydianTheme(),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(1.5)),
+            child: child!,
+          ),
+          home: LoginPage(controller: controller),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final agreement = find.byKey(const Key('login-agreement'));
+      expect(agreement, findsOneWidget);
+      expect(
+        tester.getBottomRight(agreement).dy,
+        lessThanOrEqualTo(568),
+        reason: '协议应在小屏登录首屏内可见',
+      );
+      await tester.ensureVisible(agreement);
+      await tester.pump();
+      expect(find.text('用户协议'), findsOneWidget);
+      expect(find.text('隐私政策'), findsOneWidget);
+
+      final checkbox = find.byType(Checkbox);
+      expect(checkbox, findsOneWidget);
+      await tester.tap(checkbox);
+      await tester.pump();
+      expect(tester.widget<Checkbox>(checkbox).value, isTrue);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('registration includes SMS verification before submit', (
+    tester,
+  ) async {
+    final controller = AppController(
+      MemorySessionVault(),
+      _NoopApi(),
+      MemoryHealthStore(),
+      _NoopWearable(),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSaydianTheme(),
+        home: RegistrationPage(controller: controller),
+      ),
+    );
+
+    expect(find.byKey(const Key('registration-mobile')), findsOneWidget);
+    expect(find.byKey(const Key('registration-code')), findsOneWidget);
+    expect(find.byKey(const Key('registration-send-code')), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('registration-submit')),
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.byKey(const Key('registration-submit')), findsOneWidget);
+  });
+
+  testWidgets('password recovery includes SMS code and new password fields', (
+    tester,
+  ) async {
+    final controller = AppController(
+      MemorySessionVault(),
+      _NoopApi(),
+      MemoryHealthStore(),
+      _NoopWearable(),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSaydianTheme(),
+        home: PasswordRecoveryPage(controller: controller),
+      ),
+    );
+
+    expect(find.byKey(const Key('password-recovery-mobile')), findsOneWidget);
+    expect(find.byKey(const Key('password-recovery-code')), findsOneWidget);
+    expect(find.byKey(const Key('password-recovery-password')), findsOneWidget);
+    expect(find.byKey(const Key('password-recovery-submit')), findsOneWidget);
+  });
+
+  testWidgets('health alarm is visible above every app page until dismissed', (
+    tester,
+  ) async {
+    final controller = AppController(
+      MemorySessionVault(),
+      _NoopApi(),
+      MemoryHealthStore(),
+      _NoopWearable(),
+    )..enterPreview();
+    controller.isBooting = false;
+    controller.activeHealthWarningAlert = HealthWarningAlert(
+      id: 'alert-1',
+      metric: HealthMetric.bodyTemperature,
+      title: '体温健康预警',
+      message: '体温 38.2℃，超过设定值 37.5℃',
+      triggeredAt: DateTime.now(),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(SaydianApp(controller: controller));
+    await tester.pump();
+
+    expect(find.byKey(const Key('global-health-warning')), findsOneWidget);
+    expect(find.textContaining('38.2℃'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('dismiss-health-warning')));
+    await tester.pump();
+    expect(find.byKey(const Key('global-health-warning')), findsNothing);
   });
 }
 

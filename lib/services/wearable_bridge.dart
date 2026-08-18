@@ -33,6 +33,13 @@ abstract interface class WearableBridge {
   });
 }
 
+/// Optional pull API for bridges that can verify the native connection and
+/// return the latest device metadata. Keeping it separate preserves test and
+/// third-party bridge implementations that only implement [WearableBridge].
+abstract interface class WearableDeviceDetailsBridge {
+  Future<DeviceInfo?> getConnectedDeviceDetails();
+}
+
 class WearableSdkNotConfigured implements Exception {
   const WearableSdkNotConfigured([this.message = 'Veepoo 合作方 SDK 尚未配置']);
 
@@ -42,7 +49,8 @@ class WearableSdkNotConfigured implements Exception {
   String toString() => message;
 }
 
-class MethodChannelWearableBridge implements WearableBridge {
+class MethodChannelWearableBridge
+    implements WearableBridge, WearableDeviceDetailsBridge {
   MethodChannelWearableBridge({
     MethodChannel? methods,
     EventChannel? eventChannel,
@@ -92,6 +100,14 @@ class MethodChannelWearableBridge implements WearableBridge {
 
   @override
   Future<void> disconnect() => _invokeOperation<void>('disconnect');
+
+  @override
+  Future<DeviceInfo?> getConnectedDeviceDetails() async {
+    final result = await _invokeOperation<Map<Object?, Object?>>(
+      'getDeviceDetails',
+    );
+    return result == null ? null : DeviceInfo.fromMap(result);
+  }
 
   @override
   Future<DeviceCapabilities> getCapabilities() => _queue.run(() async {

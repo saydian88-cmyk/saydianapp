@@ -82,7 +82,8 @@ class RoutedDevice {
   ) => '${transport.name}:$nativeIdentifier';
 }
 
-class RoutedWearableBridge implements WearableBridge {
+class RoutedWearableBridge
+    implements WearableBridge, WearableDeviceDetailsBridge {
   RoutedWearableBridge({
     required WearableBridge veepoo,
     required WearableBridge yucheng,
@@ -219,6 +220,21 @@ class RoutedWearableBridge implements WearableBridge {
   }
 
   @override
+  Future<DeviceInfo?> getConnectedDeviceDetails() async {
+    final transport = _activeTransport;
+    if (transport == null) return null;
+    final bridge = _sources[transport];
+    if (bridge is! WearableDeviceDetailsBridge) return null;
+    final details = await (bridge as WearableDeviceDetailsBridge)
+        .getConnectedDeviceDetails();
+    if (details == null) {
+      _activeTransport = null;
+      return null;
+    }
+    return RoutedDevice.fromDevice(transport, details).display;
+  }
+
+  @override
   Future<DeviceCapabilities> getCapabilities() =>
       _activeBridge.getCapabilities();
 
@@ -311,6 +327,29 @@ class RoutedWearableBridge implements WearableBridge {
       return;
     }
     if (transport == _activeTransport) {
+      if (event.type == 'deviceDetails' ||
+          event.type == 'reconnected' ||
+          event.type == 'disconnected' ||
+          event.type == 'syncProgress' ||
+          event.type == 'cameraShutter') {
+        final payload = Map<String, Object?>.from(event.payload);
+        final usesPrimaryId =
+            event.type == 'deviceDetails' || event.type == 'reconnected';
+        final nativeValue = usesPrimaryId ? payload['id'] : payload['deviceId'];
+        final nativeIdentifier = '${nativeValue ?? ''}';
+        if (nativeIdentifier.isNotEmpty) {
+          final prefix = '${transport.name}:';
+          final scopedIdentifier = nativeIdentifier.startsWith(prefix)
+              ? nativeIdentifier
+              : RoutedDevice.scopedID(transport, nativeIdentifier);
+          if (payload.containsKey('id')) payload['id'] = scopedIdentifier;
+          if (payload.containsKey('deviceId')) {
+            payload['deviceId'] = scopedIdentifier;
+          }
+        }
+        _eventController.add(WearableEvent(type: event.type, payload: payload));
+        return;
+      }
       _eventController.add(event);
     }
   }

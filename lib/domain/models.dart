@@ -441,6 +441,64 @@ class HealthRecord {
   String encode() => jsonEncode(toJson());
 }
 
+class HealthWarningSettings {
+  const HealthWarningSettings({
+    this.heartRateEnabled = false,
+    this.heartRateUpper = 120,
+    this.bloodPressureEnabled = false,
+    this.systolicUpper = 140,
+    this.diastolicUpper = 90,
+    this.temperatureEnabled = false,
+    this.temperatureUpper = 37.5,
+  });
+
+  final bool heartRateEnabled;
+  final int heartRateUpper;
+  final bool bloodPressureEnabled;
+  final int systolicUpper;
+  final int diastolicUpper;
+  final bool temperatureEnabled;
+  final double temperatureUpper;
+
+  Map<String, Object?> toJson() => {
+    'heartRateEnabled': heartRateEnabled,
+    'heartRateUpper': heartRateUpper,
+    'bloodPressureEnabled': bloodPressureEnabled,
+    'systolicUpper': systolicUpper,
+    'diastolicUpper': diastolicUpper,
+    'temperatureEnabled': temperatureEnabled,
+    'temperatureUpper': temperatureUpper,
+  };
+
+  factory HealthWarningSettings.fromJson(Map<String, Object?> json) =>
+      HealthWarningSettings(
+        heartRateEnabled: json['heartRateEnabled'] == true,
+        heartRateUpper: (json['heartRateUpper'] as num?)?.toInt() ?? 120,
+        bloodPressureEnabled: json['bloodPressureEnabled'] == true,
+        systolicUpper: (json['systolicUpper'] as num?)?.toInt() ?? 140,
+        diastolicUpper: (json['diastolicUpper'] as num?)?.toInt() ?? 90,
+        temperatureEnabled: json['temperatureEnabled'] == true,
+        temperatureUpper:
+            (json['temperatureUpper'] as num?)?.toDouble() ?? 37.5,
+      );
+}
+
+class HealthWarningAlert {
+  const HealthWarningAlert({
+    required this.id,
+    required this.metric,
+    required this.title,
+    required this.message,
+    required this.triggeredAt,
+  });
+
+  final String id;
+  final HealthMetric metric;
+  final String title;
+  final String message;
+  final DateTime triggeredAt;
+}
+
 class SyncBatch {
   const SyncBatch({required this.cursor, required this.records});
 

@@ -165,12 +165,16 @@ void main() {
   testWidgets('password recovery validates input without claiming success', (
     tester,
   ) async {
-    await tester.pumpWidget(const MaterialApp(home: PasswordRecoveryPage()));
+    final controller = _controller();
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(home: PasswordRecoveryPage(controller: controller)),
+    );
     await tester.enterText(
       find.byKey(const Key('password-recovery-mobile')),
       '123',
     );
-    await tester.tap(find.widgetWithText(FilledButton, '下一步'));
+    await tester.tap(find.byKey(const Key('password-recovery-submit')));
     await tester.pump();
     expect(find.text('请输入正确的中国大陆手机号'), findsOneWidget);
   });

@@ -12,9 +12,10 @@ import 'package:saydian_app/services/wearable_bridge.dart';
 import 'package:saydian_app/ui/app_theme.dart';
 import 'package:saydian_app/ui/health_trend_page.dart';
 import 'package:saydian_app/ui/pages.dart';
+import 'package:saydian_app/ui/prototype_pages.dart';
 
 void main() {
-  testWidgets('core Lanhu-aligned tabs render at a phone viewport', (
+  testWidgets('three-tab health shell exposes the redesigned home flows', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
@@ -26,22 +27,6 @@ void main() {
       MemoryHealthStore(),
       _NoopWearable(),
     )..enterPreview();
-    controller.healthRecords = [
-      HealthRecord(
-        id: 'steps-today',
-        metric: HealthMetric.steps,
-        values: const {'value': 6000},
-        unit: '步',
-        measuredAt: DateTime(2026, 8, 6),
-        timezone: '+08:00',
-        deviceId: 'watch-1',
-        firmwareVersion: 'test',
-        quality: 'good',
-        source: MeasurementSource.wearable,
-        rawVersion: 1,
-      ),
-    ];
-
     await tester.pumpWidget(
       MaterialApp(
         theme: buildSaydianTheme(),
@@ -52,44 +37,96 @@ void main() {
       ),
     );
 
-    expect(find.byKey(const Key('dashboard-today-health')), findsOneWidget);
+    expect(find.byKey(const Key('dashboard-ai-assistant')), findsOneWidget);
     expect(find.byKey(const Key('dashboard-functions')), findsOneWidget);
-    expect(find.text('6000/10000步'), findsOneWidget);
     expect(find.text('远程关爱'), findsOneWidget);
-    expect(find.text('智能管家'), findsOneWidget);
+    expect(find.text('健康百科'), findsOneWidget);
     expect(find.text('健康预警'), findsOneWidget);
     expect(find.text('赛电商城'), findsOneWidget);
+
+    final navigationBar = tester.widget<NavigationBar>(
+      find.byType(NavigationBar),
+    );
+    expect(navigationBar.destinations, hasLength(3));
+    expect(
+      navigationBar.destinations.cast<NavigationDestination>().map(
+        (destination) => destination.label,
+      ),
+      ['健康', '设备', '我的'],
+    );
+
+    await tester.tap(find.text('健康百科'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('article-category-page')), findsOneWidget);
+    expect(find.byKey(const Key('article-category-all')), findsOneWidget);
+    expect(find.text('心脑健康'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('赛电商城'));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('shop-page')), findsOneWidget);
-    expect(find.text('此功能暂时无法使用，请稍后再试'), findsOneWidget);
+    expect(find.text('此功能暂时无法使用，请稍后再试'), findsWidgets);
     await tester.pageBack();
     await tester.pumpAndSettle();
 
-    controller.selectTab(1);
-    await tester.pump();
-    expect(find.byKey(const Key('health-sport-entries')), findsOneWidget);
+    await tester.ensureVisible(find.text('全部数据'));
+    await tester.tap(find.text('全部数据'));
+    await tester.pumpAndSettle();
+    expect(find.text('全部健康数据'), findsOneWidget);
+    expect(find.text('健康数据总览'), findsOneWidget);
+    expect(find.byKey(const Key('health-sport-entries')), findsNothing);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('health-sport-entries')),
+      350,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('跑步'), findsOneWidget);
     expect(find.text('步行'), findsOneWidget);
     expect(find.text('骑行'), findsOneWidget);
     expect(find.text('徒步'), findsOneWidget);
     expect(find.text('运动记录'), findsOneWidget);
 
-    controller.selectTab(2);
-    await tester.pump();
-    expect(find.byKey(const Key('ai-page')), findsOneWidget);
-    expect(find.text('AI 健康管家'), findsOneWidget);
-    expect(find.text('健康百科'), findsOneWidget);
+    const homeMetrics = [
+      'bloodPressure',
+      'heartRate',
+      'bloodOxygen',
+      'bodyTemperature',
+      'ecg',
+      'hrv',
+    ];
+    for (final metric in homeMetrics) {
+      expect(find.byKey(ValueKey('health-metric-$metric')), findsOneWidget);
+    }
+    expect(
+      find.byKey(const ValueKey('health-metric-bloodGlucose')),
+      findsNothing,
+    );
 
-    controller.selectTab(4);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('health-metric-heartRate')),
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('health-metric-heartRate')));
+    await tester.pumpAndSettle();
+    expect(find.text('心率分析'), findsOneWidget);
+    expect(find.text('连接支持该指标的手表后测量'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    controller.selectTab(1);
+    await tester.pump();
+    expect(find.widgetWithText(FilledButton, '开始查找'), findsOneWidget);
+
+    controller.selectTab(2);
     await tester.pump();
     expect(find.byKey(const Key('my-page')), findsOneWidget);
     expect(find.text('我的订单'), findsOneWidget);
-    expect(find.text('账号设置'), findsOneWidget);
-    expect(find.text('权限管理'), findsOneWidget);
 
-    for (var tab = 0; tab < 5; tab++) {
+    for (var tab = 0; tab < 3; tab++) {
       controller.selectTab(tab);
       await tester.pump();
       expect(tester.takeException(), isNull, reason: 'tab $tab overflowed');
@@ -118,7 +155,7 @@ void main() {
       ),
     );
 
-    for (var tab = 0; tab < 5; tab++) {
+    for (var tab = 0; tab < 3; tab++) {
       controller.selectTab(tab);
       await tester.pump();
       expect(tester.takeException(), isNull, reason: 'tab $tab overflowed');
@@ -156,13 +193,391 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('dashboard-today-health')), findsOneWidget);
+    expect(find.byKey(const Key('dashboard-ai-assistant')), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('health-metric-heartRate')),
+      260,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(
       find.byKey(const ValueKey('health-metric-heartRate')),
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('three tabs remain usable at 2x system text size', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(362, 797));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final controller = AppController(
+      MemorySessionVault(),
+      _NoopApi(),
+      MemoryHealthStore(),
+      _NoopWearable(),
+    )..enterPreview();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSaydianTheme(),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: ListenableBuilder(
+          listenable: controller,
+          builder: (context, _) => AppShell(controller: controller),
+        ),
+      ),
+    );
+
+    for (var tab = 0; tab < 3; tab++) {
+      controller.selectTab(tab);
+      await tester.pump();
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: '2x text tab $tab overflowed',
+      );
+    }
+  });
+
+  testWidgets('article HTML keeps text and inline images', (tester) async {
+    final controller = AppController(
+      MemorySessionVault(),
+      _NoopApi(),
+      MemoryHealthStore(),
+      _NoopWearable(),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSaydianTheme(),
+        home: ArticleDetailPage(
+          controller: controller,
+          article: const {
+            'title': '百科图片测试',
+            'content':
+                '<p>第一段说明</p><img src="https://example.invalid/one.png"><p>第二段说明</p><img src="/two.png">',
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('第一段说明'), findsOneWidget);
+    expect(find.text('第二段说明'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('article-content-image-0')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('article-content-image-1')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('article pages distinguish loading failures from empty data', (
+    tester,
+  ) async {
+    final controller = AppController(
+      MemorySessionVault(),
+      _FailingArticleApi(),
+      MemoryHealthStore(),
+      _NoopWearable(),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSaydianTheme(),
+        home: ArticleListPage(controller: controller, title: '健康百科'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('健康百科加载失败'), findsOneWidget);
+    expect(find.byKey(const Key('article-retry')), findsOneWidget);
+    expect(find.text('该分类暂无百科内容'), findsNothing);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSaydianTheme(),
+        home: ArticleDetailPage(
+          controller: controller,
+          article: const {'id': 7, 'title': '详情加载测试'},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('健康百科加载失败'), findsOneWidget);
+    expect(find.byKey(const Key('article-retry')), findsOneWidget);
+    expect(find.text('文章详情暂未返回正文内容。'), findsNothing);
+  });
+
+  testWidgets('health analysis remains usable at 2x system text size', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(362, 797));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AppController(
+      MemorySessionVault(),
+      _NoopApi(),
+      MemoryHealthStore(),
+      _NoopWearable(),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSaydianTheme(),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: HealthTrendPage(
+          controller: controller,
+          metric: HealthMetric.heartRate,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('心率分析'), findsOneWidget);
+    expect(find.byIcon(Icons.calendar_month_outlined), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('system back stops an active watch measurement', (tester) async {
+    final wearable = _TrackingMeasurementWearable();
+    final controller =
+        AppController(
+            MemorySessionVault(),
+            _NoopApi(),
+            MemoryHealthStore(),
+            wearable,
+          )
+          ..connectedDevice = const DeviceInfo(id: 'watch-1', name: 'QA Watch')
+          ..capabilities = const DeviceCapabilities(
+            metrics: {HealthMetric.heartRate},
+          );
+    for (final state in const [
+      DeviceConnectionState.scanning,
+      DeviceConnectionState.connecting,
+      DeviceConnectionState.authenticating,
+      DeviceConnectionState.syncing,
+      DeviceConnectionState.ready,
+    ]) {
+      controller.deviceMachine.transition(state);
+    }
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSaydianTheme(),
+        home: AllHealthDataPage(controller: controller),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.byTooltip('手动测量').first);
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('心率测量'), findsOneWidget);
+    expect(wearable.starts, 1);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('心率测量'), findsNothing);
+    expect(wearable.stops, 1);
+    expect(controller.deviceState, DeviceConnectionState.ready);
+  });
+
+  test(
+    'measurement startup failure returns false and restores ready state',
+    () async {
+      final controller =
+          AppController(
+              MemorySessionVault(),
+              _NoopApi(),
+              MemoryHealthStore(),
+              _FailingMeasurementWearable(),
+            )
+            ..connectedDevice = const DeviceInfo(
+              id: 'watch-1',
+              name: 'QA Watch',
+            )
+            ..capabilities = const DeviceCapabilities(
+              metrics: {HealthMetric.heartRate},
+            );
+      for (final state in const [
+        DeviceConnectionState.scanning,
+        DeviceConnectionState.connecting,
+        DeviceConnectionState.authenticating,
+        DeviceConnectionState.syncing,
+        DeviceConnectionState.ready,
+      ]) {
+        controller.deviceMachine.transition(state);
+      }
+      addTearDown(controller.dispose);
+
+      expect(
+        await controller.startMeasurement(HealthMetric.heartRate),
+        isFalse,
+      );
+      expect(controller.deviceState, DeviceConnectionState.ready);
+      expect(controller.errorMessage, contains('心率测量失败'));
+    },
+  );
+
+  testWidgets('health warning settings persist all three alarm switches', (
+    tester,
+  ) async {
+    final vault = MemorySessionVault();
+    final controller = AppController(
+      vault,
+      _NoopApi(),
+      MemoryHealthStore(),
+      _NoopWearable(),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSaydianTheme(),
+        home: HealthWarningPage(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('warning-heart-rate-switch')));
+    await tester.tap(find.byKey(const Key('warning-blood-pressure-switch')));
+    await tester.tap(find.byKey(const Key('warning-temperature-switch')));
+    await tester.pump();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('warning-save')),
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('warning-save')));
+    await tester.pump();
+
+    expect(vault.healthWarningSettings.heartRateEnabled, isTrue);
+    expect(vault.healthWarningSettings.bloodPressureEnabled, isTrue);
+    expect(vault.healthWarningSettings.temperatureEnabled, isTrue);
+    expect(find.text('健康预警设置已保存'), findsOneWidget);
+  });
+
+  testWidgets('not-worn watch error stops progress and offers retry', (
+    tester,
+  ) async {
+    final wearable = _EventMeasurementWearable();
+    final controller = AppController(
+      MemorySessionVault(),
+      _NoopApi(),
+      MemoryHealthStore(),
+      wearable,
+    );
+    await controller.initialize();
+    controller.connectedDevice = const DeviceInfo(id: 'watch-1', name: 'W9S');
+    controller.capabilities = const DeviceCapabilities(
+      metrics: {HealthMetric.heartRate},
+    );
+    for (final state in const [
+      DeviceConnectionState.scanning,
+      DeviceConnectionState.connecting,
+      DeviceConnectionState.authenticating,
+      DeviceConnectionState.syncing,
+      DeviceConnectionState.ready,
+    ]) {
+      controller.deviceMachine.transition(state);
+    }
+    addTearDown(() async {
+      controller.dispose();
+      await wearable.close();
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSaydianTheme(),
+        home: AllHealthDataPage(controller: controller),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.byTooltip('手动测量').first);
+    await tester.pump();
+    wearable.emit(
+      const WearableEvent(
+        type: 'error',
+        payload: {'code': 'HEART_NOT_WORN', 'message': '请正确佩戴手表后重新测量心率'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('请正确佩戴手表后重新测量心率'), findsOneWidget);
+    expect(find.text('重新测量'), findsOneWidget);
+    expect(find.byType(LinearProgressIndicator), findsNothing);
+    expect(controller.deviceState, DeviceConnectionState.ready);
+  });
+
+  test(
+    'new threshold-exceeding wearable record raises a global alert',
+    () async {
+      final wearable = _EventMeasurementWearable();
+      final vault = MemorySessionVault()
+        ..healthWarningSettings = const HealthWarningSettings(
+          heartRateEnabled: true,
+          heartRateUpper: 100,
+        );
+      final controller = AppController(
+        vault,
+        _NoopApi(),
+        MemoryHealthStore(),
+        wearable,
+      );
+      await controller.initialize();
+      addTearDown(() async {
+        controller.dispose();
+        await wearable.close();
+      });
+
+      wearable.emit(
+        WearableEvent(
+          type: 'healthRecord',
+          payload: HealthRecord(
+            id: 'warning-heart-1',
+            metric: HealthMetric.heartRate,
+            values: const {'value': 128},
+            unit: 'bpm',
+            measuredAt: DateTime.now().toUtc(),
+            timezone: '+08:00',
+            deviceId: 'W9S',
+            firmwareVersion: '00.20.01',
+            quality: 'good',
+            source: MeasurementSource.wearable,
+            rawVersion: 1,
+          ).toJson(),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        controller.activeHealthWarningAlert?.metric,
+        HealthMetric.heartRate,
+      );
+      expect(controller.activeHealthWarningAlert?.message, contains('128 bpm'));
+      expect(controller.healthWarningAlerts, hasLength(1));
+    },
+  );
 
   test(
     'unsupported health settings finish with a clear device state',
@@ -243,15 +658,37 @@ void main() {
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
 
-    final recordValue = find.text('72 bpm').last;
-    await tester.ensureVisible(recordValue);
-    await tester.tap(recordValue);
+    final recordTiles = find.ancestor(
+      of: find.text('72 bpm'),
+      matching: find.byType(ListTile),
+    );
+    await tester.scrollUntilVisible(
+      recordTiles,
+      260,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(recordTiles.last);
     await tester.pumpAndSettle();
     expect(find.text('心率详情'), findsOneWidget);
   });
 }
 
-class _NoopApi implements SaydianApi {
+class _NoopApi implements SaydianApi, SaydianArticleApi {
+  @override
+  Future<List<Map<String, Object?>>> getArticleCategories({
+    int parentId = 3,
+  }) async => const [
+    {'id': 31, 'pid': 3, 'title': '心脑健康'},
+  ];
+
+  @override
+  Future<List<Map<String, Object?>>> getArticlesByCategory({
+    int? categoryId,
+    int page = 1,
+  }) async => const [
+    {'id': 7, 'title': 'QA 健康知识'},
+  ];
+
   @override
   Future<Map<String, Object?>> addCare(String mobile) async => const {};
 
@@ -412,4 +849,52 @@ class _NoopWearable implements WearableBridge {
 
   @override
   Future<List<HealthRecord>> syncHealthData({String? cursor}) async => const [];
+}
+
+class _TrackingMeasurementWearable extends _NoopWearable {
+  int starts = 0;
+  int stops = 0;
+
+  @override
+  Future<void> startMeasurement(HealthMetric metric) async {
+    starts++;
+  }
+
+  @override
+  Future<void> stopMeasurement(HealthMetric metric) async {
+    stops++;
+  }
+}
+
+class _EventMeasurementWearable extends _TrackingMeasurementWearable {
+  final _events = StreamController<WearableEvent>.broadcast(sync: true);
+
+  @override
+  Stream<WearableEvent> get events => _events.stream;
+
+  void emit(WearableEvent event) => _events.add(event);
+
+  Future<void> close() => _events.close();
+}
+
+class _FailingArticleApi extends _NoopApi {
+  @override
+  Future<List<Map<String, Object?>>> getArticlesByCategory({
+    int? categoryId,
+    int page = 1,
+  }) async {
+    throw const ApiException('模拟网络不可用');
+  }
+
+  @override
+  Future<Map<String, Object?>> getArticle(int id) async {
+    throw const ApiException('模拟网络不可用');
+  }
+}
+
+class _FailingMeasurementWearable extends _NoopWearable {
+  @override
+  Future<void> startMeasurement(HealthMetric metric) async {
+    throw StateError('simulated start failure');
+  }
 }

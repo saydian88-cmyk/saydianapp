@@ -9,7 +9,8 @@ import 'wearable_routing.dart';
 import 'yucheng_payload_mapper.dart';
 import 'yucheng_product_client.dart';
 
-class YuchengWearableBridge implements WearableBridge {
+class YuchengWearableBridge
+    implements WearableBridge, WearableDeviceDetailsBridge {
   YuchengWearableBridge({
     YuchengProductClient? client,
     this.healthReadTimeout = const Duration(seconds: 8),
@@ -100,6 +101,19 @@ class YuchengWearableBridge implements WearableBridge {
     _deviceId = null;
     _capabilities = null;
     _needsInitialHealthSettle = false;
+  }
+
+  @override
+  Future<DeviceInfo?> getConnectedDeviceDetails() async {
+    final deviceId = _deviceId;
+    if (deviceId == null) return null;
+    final name = _scannedNames[deviceId] ?? 'Yuc wearable';
+    return DeviceInfo(
+      id: deviceId,
+      name: name,
+      model: name,
+      firmwareVersion: _firmware.isEmpty ? null : _firmware,
+    );
   }
 
   @override

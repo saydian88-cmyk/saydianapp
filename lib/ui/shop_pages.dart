@@ -247,7 +247,7 @@ class _ProductCard extends StatelessWidget {
                     '销量 ${product['sales'] ?? 0}',
                     style: const TextStyle(
                       color: SaydianColors.muted,
-                      fontSize: 11,
+                      fontSize: 13,
                     ),
                   ),
                   const SizedBox(height: 4),

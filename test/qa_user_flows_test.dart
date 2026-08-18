@@ -69,8 +69,12 @@ void main() {
       find.byKey(const Key('registration-mobile')),
       '13900139000',
     );
-    await tester.enterText(find.byType(TextField).at(1), '123456');
+    await tester.enterText(
+      find.byKey(const Key('registration-code')),
+      '123456',
+    );
     await tester.enterText(find.byType(TextField).at(2), '123456');
+    await tester.enterText(find.byType(TextField).at(3), '123456');
     await tester.ensureVisible(find.byType(Checkbox));
     await tester.tap(find.byType(Checkbox));
     await tester.ensureVisible(find.byKey(const Key('registration-submit')));
@@ -152,6 +156,12 @@ void main() {
       expect(find.text('添加设备'), findsOneWidget);
       expect(find.text('QA Watch'), findsOneWidget);
       expect(wearable.scanCount, 1);
+      expect(find.byKey(const Key('device-shop-entry')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('device-shop-entry')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('shop-page')), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
       await tester.tap(find.text('连接'));
       await tester.pumpAndSettle();
 
@@ -216,19 +226,11 @@ void main() {
         await tester.pump();
         await tester.tap(find.text('连接'));
         await tester.pumpAndSettle();
-        await tester.tap(find.text('首页'));
-        await tester.pumpAndSettle();
 
         expect(controller.syncStatus, '已同步 1 条');
         expect(controller.cloudSyncStatus, '批量健康同步接口未配置');
-        await tester.scrollUntilVisible(
-          find.text('数据同步'),
-          300,
-          scrollable: find.byType(Scrollable).first,
-        );
-        await tester.pump();
-        expect(find.text('QA-1 · 已同步 1 条'), findsOneWidget);
-        expect(find.text('批量健康同步接口未配置'), findsOneWidget);
+        expect(find.text('设备同步：已同步 1 条'), findsOneWidget);
+        expect(find.text('云端同步：批量健康同步接口未配置'), findsOneWidget);
       } finally {
         debugDefaultTargetPlatformOverride = null;
       }
@@ -339,6 +341,124 @@ void main() {
     }
   });
 
+  test(
+    'measurement sentinels do not complete until a real W9S result arrives',
+    () async {
+      final wearable = _QaWearable();
+      final store = MemoryHealthStore();
+      final controller = _controller(wearable: wearable, store: store);
+      await controller.initialize();
+      addTearDown(controller.dispose);
+      controller.connectedDevice = wearable.scannedDevice;
+      for (final state in const [
+        DeviceConnectionState.scanning,
+        DeviceConnectionState.connecting,
+        DeviceConnectionState.authenticating,
+        DeviceConnectionState.syncing,
+        DeviceConnectionState.ready,
+        DeviceConnectionState.measuring,
+      ]) {
+        controller.deviceMachine.transition(state);
+      }
+
+      wearable.emitMeasurement('invalid-heart', 'heart_rate', 1, 'bpm');
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.latestByMetric[HealthMetric.heartRate], isNull);
+      expect(controller.deviceState, DeviceConnectionState.measuring);
+      expect(await store.pending(), isEmpty);
+
+      wearable.emitMeasurement('valid-heart', 'heart_rate', 78, 'bpm');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        controller.latestByMetric[HealthMetric.heartRate]?.values['value'],
+        78,
+      );
+      expect(controller.deviceState, DeviceConnectionState.ready);
+
+      controller.deviceMachine.transition(DeviceConnectionState.measuring);
+      wearable.emitMeasurement('invalid-oxygen', 'blood_oxygen', 1, '%');
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.latestByMetric[HealthMetric.bloodOxygen], isNull);
+      expect(controller.deviceState, DeviceConnectionState.measuring);
+
+      wearable.emitMeasurement('valid-oxygen', 'blood_oxygen', 97, '%');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        controller.latestByMetric[HealthMetric.bloodOxygen]?.values['value'],
+        97,
+      );
+      expect(controller.deviceState, DeviceConnectionState.ready);
+    },
+  );
+
+  test(
+    'a terminal wearable measurement error restores the ready state',
+    () async {
+      final wearable = _QaWearable();
+      final controller = _controller(wearable: wearable);
+      await controller.initialize();
+      addTearDown(controller.dispose);
+      controller.connectedDevice = wearable.scannedDevice;
+      for (final state in const [
+        DeviceConnectionState.scanning,
+        DeviceConnectionState.connecting,
+        DeviceConnectionState.authenticating,
+        DeviceConnectionState.syncing,
+        DeviceConnectionState.ready,
+        DeviceConnectionState.measuring,
+      ]) {
+        controller.deviceMachine.transition(state);
+      }
+
+      wearable.emitEvent(
+        const WearableEvent(
+          type: 'error',
+          payload: {'code': 'HEART_NOT_WORN', 'message': '请正确佩戴手表后重新测量心率'},
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.deviceState, DeviceConnectionState.ready);
+      expect(controller.errorMessage, contains('正确佩戴'));
+    },
+  );
+
+  test(
+    'a non-measurement wearable error does not stop an active sport',
+    () async {
+      final wearable = _QaWearable();
+      final controller = _controller(wearable: wearable);
+      await controller.initialize();
+      addTearDown(controller.dispose);
+      controller.connectedDevice = wearable.scannedDevice;
+      for (final state in const [
+        DeviceConnectionState.scanning,
+        DeviceConnectionState.connecting,
+        DeviceConnectionState.authenticating,
+        DeviceConnectionState.syncing,
+        DeviceConnectionState.ready,
+        DeviceConnectionState.measuring,
+      ]) {
+        controller.deviceMachine.transition(state);
+      }
+      controller.activeSport = SportMode.running;
+
+      wearable.emitEvent(
+        const WearableEvent(
+          type: 'error',
+          payload: {'code': 'SYNC_FAILED', 'message': '同步暂时失败'},
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.deviceState, DeviceConnectionState.measuring);
+      expect(controller.activeSport, SportMode.running);
+      expect(controller.errorMessage, isNotNull);
+    },
+  );
+
   testWidgets('initial sync failure keeps the authenticated device ready', (
     tester,
   ) async {
@@ -374,7 +494,8 @@ void main() {
 
       expect(controller.deviceState, DeviceConnectionState.ready);
       expect(controller.connectedDevice?.id, 'QA:WATCH:01');
-      expect(controller.errorMessage, contains('设备已连接'));
+      expect(controller.errorMessage, isNull);
+      expect(find.textContaining('设备已连接'), findsWidgets);
       expect(wearable.readSportCount, 0);
       expect(find.text('添加设备'), findsNothing);
 
@@ -389,7 +510,7 @@ void main() {
     }
   });
 
-  testWidgets('AI, order center and account settings remain navigable', (
+  testWidgets('AI, my-page entries, orders and logout remain navigable', (
     tester,
   ) async {
     final api = _QaApi();
@@ -400,9 +521,7 @@ void main() {
     addTearDown(controller.dispose);
     await _pumpPhone(tester, controller);
 
-    await tester.tap(find.text('AI'));
-    await tester.pump();
-    await tester.tap(find.widgetWithText(FilledButton, '马上提问'));
+    await tester.tap(find.byKey(const Key('dashboard-ai-ask')));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), '如何改善睡眠？');
     await tester.tap(find.byIcon(Icons.send_rounded));
@@ -422,11 +541,48 @@ void main() {
     await tester.pageBack();
     await tester.pumpAndSettle();
 
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('my-add-device')),
+      260,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.byKey(const Key('my-add-device')));
+    await tester.pumpAndSettle();
+    expect(find.text('添加设备'), findsOneWidget);
+    expect(find.byKey(const Key('device-shop-entry')), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.byKey(const Key('my-ai-question')));
+    await tester.tap(find.byKey(const Key('my-ai-question')));
+    await tester.pumpAndSettle();
+    expect(find.text('AI 健康管家'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('账号设置'),
+      260,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.tap(find.text('账号设置'));
     await tester.pumpAndSettle();
     expect(find.text('个人资料'), findsOneWidget);
     expect(find.text('收货地址'), findsOneWidget);
     expect(find.text('注销账号'), findsOneWidget);
+
+    await tester.fling(
+      find.byType(Scrollable).last,
+      const Offset(0, -700),
+      1200,
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('account-logout')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('account-logout')));
+    await tester.pumpAndSettle();
+    expect(api.loggedOut, isTrue);
+    expect(controller.session, isNull);
+    expect(find.byType(TextField), findsNWidgets(2));
     expect(tester.takeException(), isNull);
   });
 
@@ -457,6 +613,18 @@ void main() {
 
       await tester.tap(find.text('健康'));
       await tester.pump();
+      await tester.ensureVisible(find.text('全部数据'));
+      await tester.tap(find.text('全部数据'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('health-sport-entries')), findsNothing);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('health-sport-entries')),
+        350,
+        scrollable: find.byType(Scrollable).first,
+      );
       await tester.tap(find.text('跑步'));
       await tester.pumpAndSettle();
       expect(find.textContaining('请先在设备页连接手表'), findsOneWidget);
@@ -475,9 +643,9 @@ void main() {
       expect(find.text('公里'), findsOneWidget);
       await tester.pageBack();
       await tester.pumpAndSettle();
-      await tester.tap(find.text('目标设置'));
-      await tester.pumpAndSettle();
-      expect(find.text('保存目标'), findsOneWidget);
+      expect(find.text('目标设置'), findsNothing);
+      expect(find.byKey(const Key('my-add-device')), findsOneWidget);
+      expect(find.byKey(const Key('my-ai-question')), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
@@ -503,13 +671,16 @@ void main() {
   });
 }
 
-AppController _controller({_QaApi? api, _QaWearable? wearable}) =>
-    AppController(
-      MemorySessionVault(),
-      api ?? _QaApi(),
-      MemoryHealthStore(),
-      wearable ?? _QaWearable(),
-    );
+AppController _controller({
+  _QaApi? api,
+  _QaWearable? wearable,
+  HealthStore? store,
+}) => AppController(
+  MemorySessionVault(),
+  api ?? _QaApi(),
+  store ?? MemoryHealthStore(),
+  wearable ?? _QaWearable(),
+);
 
 AppController _authenticatedController({_QaApi? api, _QaWearable? wearable}) {
   final controller = _controller(api: api, wearable: wearable)
@@ -540,7 +711,8 @@ final _session = Session(
   displayName: 'QA 用户',
 );
 
-class _QaApi extends Fake implements SaydianApi, SaydianShopApi {
+class _QaApi extends Fake
+    implements SaydianApi, SaydianShopApi, SaydianArticleApi {
   _QaApi({this.uploadError});
 
   final ApiException? uploadError;
@@ -548,6 +720,7 @@ class _QaApi extends Fake implements SaydianApi, SaydianShopApi {
   (String, String)? lastRegistration;
   String? lastAiMessage;
   bool createdOrder = false;
+  bool loggedOut = false;
 
   @override
   Future<Session> login(String username, String password) async {
@@ -584,6 +757,19 @@ class _QaApi extends Fake implements SaydianApi, SaydianShopApi {
   Future<List<Map<String, Object?>>> getArticles() async => const [
     {'id': 7, 'title': 'QA 健康百科'},
   ];
+
+  @override
+  Future<List<Map<String, Object?>>> getArticleCategories({
+    int parentId = 3,
+  }) async => const [
+    {'id': 31, 'pid': 3, 'title': '心脑健康'},
+  ];
+
+  @override
+  Future<List<Map<String, Object?>>> getArticlesByCategory({
+    int? categoryId,
+    int page = 1,
+  }) => getArticles();
 
   @override
   Future<Map<String, Object?>> getArticle(int id) async => {
@@ -761,7 +947,9 @@ class _QaApi extends Fake implements SaydianApi, SaydianShopApi {
   }
 
   @override
-  Future<void> logout() async {}
+  Future<void> logout() async {
+    loggedOut = true;
+  }
 
   @override
   Future<void> deleteAccount() async {}
@@ -800,6 +988,26 @@ class _QaWearable extends Fake implements WearableBridge {
   Stream<WearableEvent> get events => _events.stream;
 
   void emitEvent(WearableEvent event) => _events.add(event);
+
+  void emitMeasurement(String id, String type, num value, String unit) =>
+      _events.add(
+        WearableEvent(
+          type: 'healthRecord',
+          payload: {
+            'id': id,
+            'type': type,
+            'values': {'value': value},
+            'unit': unit,
+            'measuredAt': DateTime.now().toUtc().toIso8601String(),
+            'timezone': '+08:00',
+            'deviceId': scannedDevice.id,
+            'firmwareVersion': 'test',
+            'quality': 'device_reported',
+            'source': 'wearable',
+            'rawVersion': 1,
+          },
+        ),
+      );
 
   @override
   Future<List<DeviceInfo>> scanDevices() async {

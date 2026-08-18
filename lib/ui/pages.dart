@@ -53,12 +53,15 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
+    final media = MediaQuery.of(context);
+    final compactLayout =
+        media.size.height < 700 || media.viewInsets.bottom > 0;
     return Scaffold(
       body: DecoratedBox(
         decoration: const BoxDecoration(gradient: saydianSoftGradient),
         child: SafeArea(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(26, 160, 26, 32),
+            padding: EdgeInsets.fromLTRB(26, compactLayout ? 28 : 96, 26, 32),
             child: Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 375),
@@ -66,7 +69,7 @@ class _LoginPageState extends State<LoginPage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const _BrandMark(),
-                    const SizedBox(height: 98),
+                    SizedBox(height: compactLayout ? 32 : 64),
                     TextField(
                       controller: _account,
                       keyboardType: TextInputType.phone,
@@ -80,7 +83,7 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                         prefixIcon: const Icon(
                           Icons.phone_iphone_outlined,
-                          color: Color(0xFF9DA1A8),
+                          color: SaydianColors.muted,
                           size: 22,
                         ),
                       ),
@@ -99,7 +102,7 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                         prefixIcon: const Icon(
                           Icons.lock_outline_rounded,
-                          color: Color(0xFF9DA1A8),
+                          color: SaydianColors.muted,
                           size: 22,
                         ),
                         suffixIcon: IconButton(
@@ -122,7 +125,9 @@ class _LoginPageState extends State<LoginPage> {
                                   settings: const RouteSettings(
                                     name: 'password-recovery',
                                   ),
-                                  builder: (_) => const PasswordRecoveryPage(),
+                                  builder: (_) => PasswordRecoveryPage(
+                                    controller: controller,
+                                  ),
                                 ),
                               ),
                         child: const Text('忘记密码？'),
@@ -137,7 +142,14 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                       const SizedBox(height: 12),
                     ],
-                    const SizedBox(height: 58),
+                    SizedBox(height: compactLayout ? 10 : 20),
+                    _AgreementRow(
+                      accepted: _accepted,
+                      onChanged: (value) =>
+                          setState(() => _accepted = value ?? false),
+                      onOpenAgreement: _openAgreement,
+                    ),
+                    SizedBox(height: compactLayout ? 10 : 16),
                     FilledButton(
                       onPressed: controller.isBusy ? null : _submit,
                       style: FilledButton.styleFrom(
@@ -195,13 +207,6 @@ class _LoginPageState extends State<LoginPage> {
                         label: const Text('游客预览'),
                       ),
                     ],
-                    const SizedBox(height: 16),
-                    _AgreementRow(
-                      accepted: _accepted,
-                      onChanged: (value) =>
-                          setState(() => _accepted = value ?? false),
-                      onOpenAgreement: _openAgreement,
-                    ),
                   ],
                 ),
               ),
@@ -249,109 +254,110 @@ class _AgreementRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final linkStyle = TextButton.styleFrom(
       foregroundColor: SaydianColors.blue,
-      minimumSize: Size.zero,
-      padding: const EdgeInsets.symmetric(horizontal: 2),
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      textStyle: const TextStyle(fontSize: 12),
+      minimumSize: const Size(48, 48),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      textStyle: const TextStyle(fontSize: 14),
     );
     return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+      key: const Key('login-agreement'),
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Checkbox(
-          value: accepted,
-          onChanged: onChanged,
-          visualDensity: VisualDensity.compact,
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        ),
+        Checkbox(value: accepted, onChanged: onChanged),
         const SizedBox(width: 2),
-        const Text('我已阅读并同意', style: TextStyle(fontSize: 12)),
-        TextButton(
-          onPressed: () => onOpenAgreement(id: 2, title: '用户协议'),
-          style: linkStyle,
-          child: const Text('用户协议'),
-        ),
-        const Text('和', style: TextStyle(fontSize: 12)),
-        TextButton(
-          onPressed: () => onOpenAgreement(id: 3, title: '隐私政策'),
-          style: linkStyle,
-          child: const Text('隐私政策'),
+        Expanded(
+          child: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              const Text('我已阅读并同意', style: TextStyle(fontSize: 14)),
+              TextButton(
+                onPressed: () => onOpenAgreement(id: 2, title: '用户协议'),
+                style: linkStyle,
+                child: const Text('用户协议'),
+              ),
+              const Text('和', style: TextStyle(fontSize: 14)),
+              TextButton(
+                onPressed: () => onOpenAgreement(id: 3, title: '隐私政策'),
+                style: linkStyle,
+                child: const Text('隐私政策'),
+              ),
+            ],
+          ),
         ),
       ],
     );
   }
 }
 
-class AppShell extends StatelessWidget {
+class AppShell extends StatefulWidget {
   const AppShell({required this.controller, super.key});
 
   final AppController controller;
 
-  static const _titles = ['', '健康', 'AI 智能', '设备', '我的'];
+  @override
+  State<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends State<AppShell> {
+  static const _titles = ['', '设备', '我的'];
+  String? _scheduledError;
+
+  void _showPendingError(BuildContext context) {
+    final message = widget.controller.errorMessage?.trim();
+    if (message == null || message.isEmpty || message == _scheduledError) {
+      return;
+    }
+    _scheduledError = message;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(message)));
+      widget.controller.clearError();
+      _scheduledError = null;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    _showPendingError(context);
+    final controller = widget.controller;
+    final selectedIndex = controller.selectedTab.clamp(0, 2).toInt();
     final pages = [
       DashboardPage(controller: controller),
-      HealthPage(controller: controller),
-      AiPage(controller: controller),
       DevicePage(controller: controller),
       SettingsPage(controller: controller),
     ];
     return Scaffold(
-      appBar: controller.selectedTab == 0
+      appBar: selectedIndex == 0
           ? null
-          : AppBar(
-              title: Text(_titles[controller.selectedTab]),
-              actions: const [],
+          : AppBar(title: Text(_titles[selectedIndex]), actions: const []),
+      body: IndexedStack(index: selectedIndex, children: pages),
+      bottomNavigationBar: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: Color(0xFFF1EAE6))),
+        ),
+        child: NavigationBar(
+          selectedIndex: selectedIndex,
+          onDestinationSelected: controller.selectTab,
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.favorite_border_rounded),
+              selectedIcon: Icon(Icons.favorite_rounded),
+              label: '健康',
             ),
-      body: Column(
-        children: [
-          if (controller.errorMessage != null)
-            MaterialBanner(
-              content: Text(controller.errorMessage!),
-              leading: const Icon(Icons.info_outline, color: Colors.deepOrange),
-              actions: [
-                TextButton(
-                  onPressed: controller.clearError,
-                  child: const Text('知道了'),
-                ),
-              ],
+            NavigationDestination(
+              icon: Icon(Icons.watch_outlined),
+              selectedIcon: Icon(Icons.watch_rounded),
+              label: '设备',
             ),
-          Expanded(
-            child: IndexedStack(index: controller.selectedTab, children: pages),
-          ),
-        ],
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: controller.selectedTab,
-        onDestinationSelected: controller.selectTab,
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
-            label: '首页',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.favorite_border_rounded),
-            selectedIcon: Icon(Icons.favorite_rounded),
-            label: '健康',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.auto_awesome_outlined),
-            selectedIcon: Icon(Icons.auto_awesome_rounded),
-            label: 'AI',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.watch_outlined),
-            selectedIcon: Icon(Icons.watch_rounded),
-            label: '设备',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: '我的',
-          ),
-        ],
+            NavigationDestination(
+              icon: Icon(Icons.person_outline),
+              selectedIcon: Icon(Icons.person),
+              label: '我的',
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -365,17 +371,13 @@ class DashboardPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final latest = controller.latestByMetric;
-    final metrics = [
+    const metrics = [
       HealthMetric.bloodPressure,
-      HealthMetric.bloodGlucose,
+      HealthMetric.heartRate,
       HealthMetric.bloodOxygen,
       HealthMetric.bodyTemperature,
       HealthMetric.ecg,
-      HealthMetric.heartRate,
       HealthMetric.hrv,
-      HealthMetric.bodyComposition,
-      HealthMetric.sleep,
-      HealthMetric.bloodComposition,
     ];
     final textScale = MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 2.0);
     return SafeArea(
@@ -386,18 +388,8 @@ class DashboardPage extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
           children: [
             _DashboardHeader(controller: controller),
-            const SizedBox(height: 14),
-            _TodayHealthOverview(
-              latest: latest,
-              stepTarget: controller.stepGoal.toDouble(),
-              distanceTarget: controller.distanceGoal,
-              calorieTarget: controller.calorieGoal.toDouble(),
-              onSetGoal: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => GoalSettingsPage(controller: controller),
-                ),
-              ),
-            ),
+            const SizedBox(height: 18),
+            _AiHealthAssistantCard(controller: controller),
             const SizedBox(height: 18),
             _FeatureEntryGrid(
               onCare: () => Navigator.of(context).push(
@@ -408,7 +400,14 @@ class DashboardPage extends StatelessWidget {
                   ),
                 ),
               ),
-              onAssistant: () => controller.selectTab(2),
+              onEncyclopedia: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  settings: const RouteSettings(
+                    name: 'health-encyclopedia-categories',
+                  ),
+                  builder: (_) => ArticleCategoryPage(controller: controller),
+                ),
+              ),
               onWarning: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
                   settings: const RouteSettings(name: 'health-warnings'),
@@ -431,7 +430,12 @@ class DashboardPage extends StatelessWidget {
               title: '健康数据',
               subtitle: DateFormat('M月d日').format(DateTime.now()),
               actionLabel: '全部数据',
-              onAction: () => controller.selectTab(1),
+              onAction: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  settings: const RouteSettings(name: 'all-health-data'),
+                  builder: (_) => AllHealthDataPage(controller: controller),
+                ),
+              ),
             ),
             const SizedBox(height: 12),
             GridView.builder(
@@ -440,7 +444,7 @@ class DashboardPage extends StatelessWidget {
               itemCount: metrics.length,
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 2,
-                mainAxisExtent: 184 + (textScale - 1) * 36,
+                mainAxisExtent: 205 + (textScale - 1) * 110,
                 crossAxisSpacing: 12,
                 mainAxisSpacing: 12,
               ),
@@ -453,24 +457,19 @@ class DashboardPage extends StatelessWidget {
                 );
               },
             ),
-            const SizedBox(height: 18),
-            _DeviceHero(controller: controller),
-            const SizedBox(height: 14),
-            _StatusCard(
-              title: '数据同步',
-              message: controller.cloudSyncStatus,
-              icon: Icons.cloud_done_outlined,
-              action: IconButton(
-                onPressed: controller.synchronizeCloud,
-                icon: const Icon(Icons.sync_rounded),
-              ),
-            ),
             const SizedBox(height: 12),
             const _InlineNotice(
               message: '测量结果仅供健康管理参考，如有不适请咨询专业医务人员。',
               icon: Icons.health_and_safety_outlined,
               color: SaydianColors.green,
             ),
+            const SizedBox(height: 22),
+            const Text(
+              '运动与记录',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 12),
+            _SportEntryPanel(controller: controller),
           ],
         ),
       ),
@@ -489,12 +488,16 @@ class _DashboardHeader extends StatelessWidget {
     return Row(
       children: [
         Container(
-          width: 42,
-          height: 42,
+          width: 58,
+          height: 58,
           alignment: Alignment.center,
-          child: const SaydianBrandMark(size: 42),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+          ),
+          child: const SaydianBrandMark(size: 52),
         ),
-        const SizedBox(width: 11),
+        const SizedBox(width: 14),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -504,32 +507,135 @@ class _DashboardHeader extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
+                  fontSize: 23,
+                  fontWeight: FontWeight.w900,
                 ),
               ),
               const SizedBox(height: 2),
               const Text(
                 '今天也要保持好状态',
-                style: TextStyle(color: SaydianColors.muted, fontSize: 12),
+                style: TextStyle(color: SaydianColors.muted, fontSize: 15),
               ),
             ],
           ),
         ),
         const SizedBox(width: 6),
-        IconButton.filledTonal(
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => NotificationsPage(controller: controller),
+        Badge(
+          smallSize: 9,
+          backgroundColor: Color(0xFFD70B25),
+          child: IconButton(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => NotificationsPage(controller: controller),
+              ),
             ),
+            icon: const Icon(Icons.notifications_none_rounded, size: 29),
           ),
-          icon: const Icon(Icons.notifications_none_rounded),
         ),
       ],
     );
   }
 }
 
+class _AiHealthAssistantCard extends StatelessWidget {
+  const _AiHealthAssistantCard({required this.controller});
+
+  final AppController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final enlargedText = MediaQuery.textScalerOf(context).scale(1) > 1.25;
+    final doctor = Align(
+      alignment: Alignment.bottomCenter,
+      child: Image.asset(
+        'assets/branding/ai-health-manager-doctor.png',
+        height: enlargedText ? 140 : 190,
+        fit: BoxFit.cover,
+        alignment: Alignment.topCenter,
+      ),
+    );
+    final content = Padding(
+      padding: EdgeInsets.fromLTRB(
+        enlargedText ? 18 : 6,
+        enlargedText ? 8 : 22,
+        18,
+        20,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text(
+            'AI健康管家',
+            style: TextStyle(
+              color: Color(0xFF9E1025),
+              fontSize: 25,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '我是您的健康管家，\n有任何健康问题都可以向我提问。',
+            style: TextStyle(
+              color: SaydianColors.ink,
+              fontSize: 15,
+              height: 1.5,
+            ),
+          ),
+          const SizedBox(height: 16),
+          FilledButton(
+            key: const Key('dashboard-ai-ask'),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                settings: const RouteSettings(name: 'ai-health-chat'),
+                builder: (_) => AiChatPage(controller: controller, app: 1),
+              ),
+            ),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFD20B27),
+              foregroundColor: Colors.white,
+              minimumSize: const Size.fromHeight(50),
+              shape: const StadiumBorder(),
+            ),
+            child: const Text(
+              '马上提问',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+            ),
+          ),
+        ],
+      ),
+    );
+    return Container(
+      key: const Key('dashboard-ai-assistant'),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFFFFFBF7), Color(0xFFFFF2EC)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        border: Border.all(color: const Color(0xFFF0C986), width: 1.5),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: enlargedText
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [doctor, content],
+            )
+          : Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(flex: 42, child: doctor),
+                Expanded(flex: 58, child: content),
+              ],
+            ),
+    );
+  }
+}
+
+// Retained for the full activity-goal page; intentionally hidden on the home.
+// ignore: unused_element
 class _TodayHealthOverview extends StatelessWidget {
   const _TodayHealthOverview({
     required this.latest,
@@ -717,13 +823,13 @@ class _GoalProgressRow extends StatelessWidget {
 class _FeatureEntryGrid extends StatelessWidget {
   const _FeatureEntryGrid({
     required this.onCare,
-    required this.onAssistant,
+    required this.onEncyclopedia,
     required this.onWarning,
     required this.onMall,
   });
 
   final VoidCallback onCare;
-  final VoidCallback onAssistant;
+  final VoidCallback onEncyclopedia;
   final VoidCallback onWarning;
   final VoidCallback onMall;
 
@@ -739,16 +845,16 @@ class _FeatureEntryGrid extends StatelessWidget {
               child: _FeatureEntry(
                 label: '远程关爱',
                 icon: Icons.family_restroom_rounded,
-                color: const Color(0xFFFF8E70),
+                color: const Color(0xFFE84358),
                 onTap: onCare,
               ),
             ),
             Expanded(
               child: _FeatureEntry(
-                label: '智能管家',
-                icon: Icons.auto_awesome_rounded,
-                color: const Color(0xFF6F8FF8),
-                onTap: onAssistant,
+                label: '健康百科',
+                icon: Icons.menu_book_rounded,
+                color: const Color(0xFFD5A03D),
+                onTap: onEncyclopedia,
               ),
             ),
             Expanded(
@@ -763,7 +869,7 @@ class _FeatureEntryGrid extends StatelessWidget {
               child: _FeatureEntry(
                 label: '赛电商城',
                 icon: Icons.shopping_bag_rounded,
-                color: const Color(0xFF46BC82),
+                color: const Color(0xFFD99C2B),
                 onTap: onMall,
               ),
             ),
@@ -798,19 +904,27 @@ class _FeatureEntry extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 46,
-              height: 46,
+              width: 52,
+              height: 52,
               decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.13),
-                borderRadius: BorderRadius.circular(15),
+                gradient: LinearGradient(
+                  colors: [
+                    color.withValues(alpha: 0.92),
+                    color.withValues(alpha: 0.68),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(16),
               ),
-              child: Icon(icon, color: color, size: 25),
+              child: Icon(icon, color: Colors.white, size: 29),
             ),
             const SizedBox(height: 9),
             Text(
               label,
-              maxLines: 1,
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+              maxLines: 2,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
             ),
           ],
         ),
@@ -819,6 +933,8 @@ class _FeatureEntry extends StatelessWidget {
   }
 }
 
+// Retained for device-focused layouts; intentionally hidden on the home.
+// ignore: unused_element
 class _DeviceHero extends StatelessWidget {
   const _DeviceHero({required this.controller});
 
@@ -929,96 +1045,118 @@ class _MetricCard extends StatelessWidget {
       HealthMetric.bloodComposition => Icons.science_outlined,
       _ => Icons.monitor_heart_outlined,
     };
-    final color = switch (metric) {
-      HealthMetric.steps => SaydianColors.green,
-      HealthMetric.sleep => const Color(0xFF8C7CF0),
-      HealthMetric.heartRate => SaydianColors.pink,
-      HealthMetric.bloodOxygen => SaydianColors.blue,
-      HealthMetric.bloodPressure => SaydianColors.orange,
-      HealthMetric.bloodGlucose => SaydianColors.green,
-      HealthMetric.bodyTemperature => SaydianColors.cyan,
-      HealthMetric.ecg => const Color(0xFF6E8DF5),
-      HealthMetric.hrv => const Color(0xFF8C7CF0),
-      HealthMetric.bodyComposition => SaydianColors.cyan,
-      HealthMetric.bloodComposition => SaydianColors.pink,
-      _ => SaydianColors.green,
-    };
+    const iconColor = Color(0xFFE52E45);
+    const chartColor = Color(0xFF4F89F7);
+    final status = _homeMetricStatus(controller, record);
+    final needsAttention = status == '请关注';
+    final supportsManualMeasurement = const {
+      HealthMetric.bloodPressure,
+      HealthMetric.heartRate,
+      HealthMetric.bloodOxygen,
+      HealthMetric.bodyTemperature,
+      HealthMetric.ecg,
+    }.contains(metric);
     return GestureDetector(
       key: ValueKey('health-metric-${metric.name}'),
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) =>
-              HealthTrendPage(controller: controller, metric: metric),
+          builder: (_) => HealthTrendPage(
+            controller: controller,
+            metric: metric,
+            onMeasure: supportsManualMeasurement
+                ? () =>
+                      _showHealthMeasurementDialog(context, controller, metric)
+                : null,
+          ),
         ),
       ),
       child: Card(
+        elevation: 2,
+        shadowColor: const Color(0x1A6B4C42),
+        surfaceTintColor: Colors.transparent,
         child: Padding(
-          padding: const EdgeInsets.all(15),
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
                   Container(
-                    width: 34,
-                    height: 34,
+                    width: 38,
+                    height: 38,
                     decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.14),
+                      color: iconColor.withValues(alpha: 0.11),
                       shape: BoxShape.circle,
                     ),
-                    child: Icon(icon, color: color, size: 19),
+                    child: Icon(icon, color: iconColor, size: 23),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       metric.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
+                      maxLines: 2,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 14),
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      _healthDisplayValue(record, controller),
-                      style: const TextStyle(
-                        fontSize: 23,
-                        fontWeight: FontWeight.w900,
-                      ),
+              const SizedBox(height: 9),
+              Wrap(
+                crossAxisAlignment: WrapCrossAlignment.end,
+                spacing: 6,
+                runSpacing: 2,
+                children: [
+                  Text(
+                    _healthDisplayValue(record, controller),
+                    style: const TextStyle(
+                      fontSize: 29,
+                      fontWeight: FontWeight.w900,
                     ),
-                    const SizedBox(width: 6),
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 3),
-                      child: Text(
-                        _healthDisplayUnit(metric, record, controller),
-                        style: const TextStyle(color: Colors.black54),
-                      ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 3),
+                    child: Text(
+                      _healthDisplayUnit(metric, record, controller),
+                      style: const TextStyle(color: SaydianColors.muted),
                     ),
-                  ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 3,
+                ),
+                decoration: BoxDecoration(
+                  color: record == null
+                      ? const Color(0xFFF2EFED)
+                      : needsAttention
+                      ? const Color(0xFFFFE7E5)
+                      : const Color(0xFFE7F7E6),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  status,
+                  style: TextStyle(
+                    color: record == null
+                        ? SaydianColors.muted
+                        : needsAttention
+                        ? const Color(0xFFC62828)
+                        : const Color(0xFF27852A),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
-              const SizedBox(height: 10),
+              const Spacer(),
               HealthMetricMiniChart(
                 controller: controller,
                 metric: metric,
-                color: color,
-              ),
-              const Spacer(),
-              Text(
-                record == null
-                    ? '暂无趋势数据'
-                    : '更新于 ${DateFormat('HH:mm').format(record!.measuredAt.toLocal())}',
-                style: const TextStyle(
-                  color: SaydianColors.muted,
-                  fontSize: 11,
-                ),
+                color: chartColor,
               ),
             ],
           ),
@@ -1026,6 +1164,36 @@ class _MetricCard extends StatelessWidget {
       ),
     );
   }
+}
+
+String _homeMetricStatus(AppController controller, HealthRecord? record) {
+  if (record == null) return '暂无数据';
+  final quality = record.quality.toLowerCase();
+  if (quality.contains('poor') ||
+      quality.contains('warning') ||
+      quality.contains('abnormal')) {
+    return '请关注';
+  }
+  final settings = controller.healthWarningSettings;
+  if (record.metric == HealthMetric.heartRate && settings.heartRateEnabled) {
+    final value = record.values['value'];
+    if (value != null && value > settings.heartRateUpper) return '请关注';
+  }
+  if (record.metric == HealthMetric.bloodPressure &&
+      settings.bloodPressureEnabled) {
+    final systolic = record.values['systolic'];
+    final diastolic = record.values['diastolic'];
+    if ((systolic != null && systolic > settings.systolicUpper) ||
+        (diastolic != null && diastolic > settings.diastolicUpper)) {
+      return '请关注';
+    }
+  }
+  if (record.metric == HealthMetric.bodyTemperature &&
+      settings.temperatureEnabled) {
+    final value = record.values['value'];
+    if (value != null && value > settings.temperatureUpper) return '请关注';
+  }
+  return '正常';
 }
 
 class _SectionTitle extends StatelessWidget {
@@ -1043,19 +1211,55 @@ class _SectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    final enlargedText = MediaQuery.textScalerOf(context).scale(1) > 1.25;
+    final heading = Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 8,
+      runSpacing: 4,
       children: [
         Text(
           title,
-          style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800),
+          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
         ),
-        const SizedBox(width: 8),
-        Text(
-          subtitle,
-          style: const TextStyle(color: SaydianColors.muted, fontSize: 12),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.calendar_month_outlined,
+              size: 19,
+              color: SaydianColors.muted,
+            ),
+            const SizedBox(width: 5),
+            Text(
+              subtitle,
+              style: const TextStyle(color: SaydianColors.muted, fontSize: 14),
+            ),
+          ],
         ),
-        const Spacer(),
-        TextButton(onPressed: onAction, child: Text(actionLabel)),
+      ],
+    );
+    final action = TextButton.icon(
+      onPressed: onAction,
+      iconAlignment: IconAlignment.end,
+      icon: const Icon(Icons.chevron_right_rounded, size: 21),
+      label: Text(
+        actionLabel,
+        style: const TextStyle(fontWeight: FontWeight.w800),
+      ),
+    );
+    if (enlargedText) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          heading,
+          Align(alignment: Alignment.centerRight, child: action),
+        ],
+      );
+    }
+    return Row(
+      children: [
+        Expanded(child: heading),
+        action,
       ],
     );
   }
@@ -1095,8 +1299,6 @@ class HealthPage extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
-          _SportEntryPanel(controller: controller),
-          const SizedBox(height: 16),
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
@@ -1213,6 +1415,23 @@ class HealthPage extends StatelessWidget {
   }
 }
 
+class AllHealthDataPage extends StatelessWidget {
+  const AllHealthDataPage({required this.controller, super.key});
+
+  final AppController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('全部健康数据')),
+      body: ListenableBuilder(
+        listenable: controller,
+        builder: (context, _) => HealthPage(controller: controller),
+      ),
+    );
+  }
+}
+
 Future<void> _showHealthMeasurementDialog(
   BuildContext context,
   AppController controller,
@@ -1255,55 +1474,81 @@ class _HealthMeasurementDialogState extends State<_HealthMeasurementDialog> {
     if (mounted) Navigator.of(context).pop();
   }
 
+  Future<void> _retry() async {
+    if (_stopping) return;
+    setState(() => _stopping = true);
+    await widget.controller.stopMeasurement(widget.metric);
+    if (!mounted) return;
+    setState(() => _stopping = false);
+    await widget.controller.startMeasurement(widget.metric);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text('${widget.metric.label}测量'),
-      content: ListenableBuilder(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) unawaited(_finish());
+      },
+      child: ListenableBuilder(
         listenable: widget.controller,
         builder: (context, _) {
           final record = widget.controller.latestByMetric[widget.metric];
           final isNew = record != null && record.measuredAt.isAfter(_startedAt);
-          final failed =
-              widget.controller.deviceState == DeviceConnectionState.error;
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                isNew
-                    ? Icons.check_circle_rounded
-                    : Icons.monitor_heart_rounded,
-                color: isNew ? SaydianColors.green : SaydianColors.pink,
-                size: 54,
-              ),
-              const SizedBox(height: 14),
-              Text(
-                isNew
-                    ? '${_healthDisplayValue(record, widget.controller)} ${_healthDisplayUnit(widget.metric, record, widget.controller)}'
-                    : failed
-                    ? widget.controller.errorMessage ?? '测量未完成'
-                    : '请保持正确佩戴并静止，等待手表返回结果',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: isNew ? 24 : 14,
-                  fontWeight: isNew ? FontWeight.w900 : FontWeight.w500,
-                  height: 1.5,
+          final failure = widget.controller.measurementErrorMessage;
+          final failed = !isNew && failure != null;
+          return AlertDialog(
+            title: Text('${widget.metric.label}测量'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  isNew
+                      ? Icons.check_circle_rounded
+                      : failed
+                      ? Icons.error_outline_rounded
+                      : Icons.monitor_heart_rounded,
+                  color: isNew
+                      ? SaydianColors.green
+                      : failed
+                      ? SaydianColors.danger
+                      : SaydianColors.pink,
+                  size: 54,
                 ),
-              ),
-              if (!isNew && !failed) ...[
-                const SizedBox(height: 16),
-                const LinearProgressIndicator(),
+                const SizedBox(height: 14),
+                Text(
+                  isNew
+                      ? '${_healthDisplayValue(record, widget.controller)} ${_healthDisplayUnit(widget.metric, record, widget.controller)}'
+                      : failed
+                      ? failure
+                      : '请保持正确佩戴并静止，等待手表返回结果',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: isNew ? 24 : 16,
+                    fontWeight: isNew ? FontWeight.w900 : FontWeight.w600,
+                    height: 1.5,
+                  ),
+                ),
+                if (!isNew && !failed) ...[
+                  const SizedBox(height: 16),
+                  const LinearProgressIndicator(),
+                ],
               ],
+            ),
+            actions: [
+              if (failed)
+                FilledButton(
+                  onPressed: _stopping ? null : _retry,
+                  child: const Text('重新测量'),
+                ),
+              TextButton(
+                onPressed: _stopping ? null : _finish,
+                child: Text(_stopping ? '正在停止' : (failed ? '关闭' : '结束测量')),
+              ),
             ],
           );
         },
       ),
-      actions: [
-        TextButton(
-          onPressed: _stopping ? null : _finish,
-          child: Text(_stopping ? '正在停止' : '结束测量'),
-        ),
-      ],
     );
   }
 }
@@ -1328,23 +1573,31 @@ class _SportEntryPanel extends StatelessWidget {
       ),
       child: Column(
         children: [
-          Row(
-            children: [
-              for (final mode in SportMode.values)
-                Expanded(
-                  child: _SportEntry(
-                    mode: mode,
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => SportSessionPage(
-                          controller: controller,
-                          mode: mode,
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final enlarged = MediaQuery.textScalerOf(context).scale(1) > 1.25;
+              final columns = enlarged ? 2 : 4;
+              final width = constraints.maxWidth / columns;
+              return Wrap(
+                children: [
+                  for (final mode in SportMode.values)
+                    SizedBox(
+                      width: width,
+                      child: _SportEntry(
+                        mode: mode,
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => SportSessionPage(
+                              controller: controller,
+                              mode: mode,
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                ),
-            ],
+                ],
+              );
+            },
           ),
           const SizedBox(height: 12),
           Card(
@@ -1409,7 +1662,8 @@ class _SportEntry extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               mode.label,
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
             ),
           ],
         ),
@@ -2006,11 +2260,10 @@ class _HealthRow extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       status,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      maxLines: 2,
                       style: const TextStyle(
                         color: SaydianColors.muted,
-                        fontSize: 12,
+                        fontSize: 14,
                       ),
                     ),
                   ],
@@ -2031,18 +2284,17 @@ class _HealthRow extends StatelessWidget {
                     _healthDisplayUnit(metric, record, controller),
                     style: const TextStyle(
                       color: SaydianColors.muted,
-                      fontSize: 10,
+                      fontSize: 14,
                     ),
                   ),
                 ],
               ),
               if (onMeasure != null) ...[
                 const SizedBox(width: 7),
-                Icon(
-                  Icons.play_circle_fill_rounded,
-                  color: connected && supported == true
-                      ? SaydianColors.ink
-                      : const Color(0xFFD1D4D9),
+                IconButton(
+                  tooltip: '手动测量',
+                  onPressed: connected && supported == true ? onMeasure : null,
+                  icon: const Icon(Icons.play_circle_fill_rounded),
                 ),
               ],
               IconButton(
@@ -2268,6 +2520,205 @@ class AiPage extends StatelessWidget {
   }
 }
 
+class ArticleCategoryPage extends StatefulWidget {
+  const ArticleCategoryPage({required this.controller, super.key});
+
+  final AppController controller;
+
+  @override
+  State<ArticleCategoryPage> createState() => _ArticleCategoryPageState();
+}
+
+class _ArticleCategoryPageState extends State<ArticleCategoryPage> {
+  List<Map<String, Object?>> _categories = const [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    if (mounted) setState(() => _loading = true);
+    final categories = await widget.controller.loadArticleCategories();
+    if (!mounted) return;
+    setState(() {
+      _categories = categories;
+      _loading = false;
+    });
+  }
+
+  void _open({int? categoryId, required String title}) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        settings: const RouteSettings(name: 'health-encyclopedia-list'),
+        builder: (_) => ArticleListPage(
+          controller: widget.controller,
+          title: title,
+          categoryId: categoryId,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final error = widget.controller.articleCategoryLoadError;
+    return Scaffold(
+      appBar: AppBar(title: const Text('健康百科')),
+      body: KeyedSubtree(
+        key: const Key('article-category-page'),
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : error != null
+            ? _ArticleLoadFailure(onRetry: _load)
+            : ListView(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                children: [
+                  Card(
+                    child: ListTile(
+                      key: const Key('article-category-all'),
+                      onTap: () => _open(title: '健康百科'),
+                      leading: const CircleAvatar(
+                        child: Icon(Icons.menu_book_rounded),
+                      ),
+                      title: const Text('全部'),
+                      subtitle: const Text('查看全部健康百科内容'),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                    ),
+                  ),
+                  for (final category in _categories)
+                    Card(
+                      child: ListTile(
+                        onTap: () => _open(
+                          categoryId: int.tryParse('${category['id'] ?? ''}'),
+                          title:
+                              '${category['title'] ?? category['name'] ?? '健康百科'}',
+                        ),
+                        leading: const CircleAvatar(
+                          child: Icon(Icons.health_and_safety_outlined),
+                        ),
+                        title: Text(
+                          '${category['title'] ?? category['name'] ?? '健康百科'}',
+                        ),
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                      ),
+                    ),
+                ],
+              ),
+      ),
+    );
+  }
+}
+
+class ArticleListPage extends StatefulWidget {
+  const ArticleListPage({
+    required this.controller,
+    this.title = '健康百科',
+    this.categoryId,
+    super.key,
+  });
+
+  final AppController controller;
+  final String title;
+  final int? categoryId;
+
+  @override
+  State<ArticleListPage> createState() => _ArticleListPageState();
+}
+
+class _ArticleListPageState extends State<ArticleListPage> {
+  List<Map<String, Object?>> _articles = const [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    if (mounted) setState(() => _loading = true);
+    final articles = await widget.controller.loadArticlesByCategory(
+      categoryId: widget.categoryId,
+    );
+    if (!mounted) return;
+    setState(() {
+      _articles = articles;
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final error = widget.controller.articleListLoadError;
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.title)),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : error != null
+          ? _ArticleLoadFailure(onRetry: _load)
+          : _articles.isEmpty
+          ? const Center(child: Text('该分类暂无百科内容'))
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: ListView.separated(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                itemCount: _articles.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 10),
+                itemBuilder: (context, index) {
+                  final article = _articles[index];
+                  return Card(
+                    child: _ArticleTile(
+                      article: article,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => ArticleDetailPage(
+                            controller: widget.controller,
+                            article: article,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+    );
+  }
+}
+
+class _ArticleLoadFailure extends StatelessWidget {
+  const _ArticleLoadFailure({required this.onRetry});
+
+  final Future<void> Function() onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_off_outlined, size: 44),
+            const SizedBox(height: 12),
+            const Text('健康百科加载失败'),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              key: const Key('article-retry'),
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('重新加载'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ArticleTile extends StatelessWidget {
   const _ArticleTile({required this.article, required this.onTap});
 
@@ -2324,45 +2775,125 @@ class ArticleDetailPage extends StatefulWidget {
 
 class _ArticleDetailPageState extends State<ArticleDetailPage> {
   late Map<String, Object?> _article;
+  int? _articleId;
+  bool _loading = false;
 
   @override
   void initState() {
     super.initState();
     _article = widget.article;
-    final id = int.tryParse('${widget.article['id'] ?? ''}');
-    if (id != null) unawaited(_load(id));
+    _articleId = int.tryParse('${widget.article['id'] ?? ''}');
+    if (_articleId != null) unawaited(_load());
   }
 
-  Future<void> _load(int id) async {
+  Future<void> _load() async {
+    final id = _articleId;
+    if (id == null) return;
+    if (mounted) setState(() => _loading = true);
     final article = widget.singleArticle
         ? await widget.controller.loadSingleArticle(id)
         : await widget.controller.loadArticle(id);
-    if (mounted && article.isNotEmpty) setState(() => _article = article);
+    if (!mounted) return;
+    setState(() {
+      if (article.isNotEmpty) _article = article;
+      _loading = false;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final title = '${_article['title'] ?? '健康百科'}';
     final raw = '${_article['content'] ?? _article['description'] ?? ''}';
-    final content = _plainTextFromHtml(raw);
+    final error = widget.controller.articleDetailLoadError;
     return Scaffold(
       appBar: AppBar(title: Text(title)),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          Text(
-            title,
-            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            content.isEmpty ? '文章详情暂未返回正文内容。' : content,
-            style: const TextStyle(fontSize: 15, height: 1.75),
-          ),
-        ],
-      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : error != null
+          ? _ArticleLoadFailure(onRetry: _load)
+          : ListView(
+              padding: const EdgeInsets.all(20),
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (raw.trim().isEmpty)
+                  const Text(
+                    '文章详情暂未返回正文内容。',
+                    style: TextStyle(fontSize: 15, height: 1.75),
+                  )
+                else
+                  ..._articleContentWidgets(raw),
+              ],
+            ),
     );
   }
+}
+
+List<Widget> _articleContentWidgets(String raw) {
+  final imagePattern = RegExp(
+    r'''<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>''',
+    caseSensitive: false,
+  );
+  final widgets = <Widget>[];
+  var cursor = 0;
+  var imageIndex = 0;
+  for (final match in imagePattern.allMatches(raw)) {
+    final text = _plainTextFromHtml(raw.substring(cursor, match.start));
+    if (text.isNotEmpty) {
+      widgets.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child: Text(text, style: const TextStyle(fontSize: 15, height: 1.75)),
+        ),
+      );
+    }
+    final source = _normalizeArticleImageUrl(match.group(1) ?? '');
+    widgets.add(
+      Padding(
+        padding: const EdgeInsets.only(bottom: 14),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: Image.network(
+            source,
+            key: ValueKey('article-content-image-${imageIndex++}'),
+            fit: BoxFit.fitWidth,
+            loadingBuilder: (context, child, progress) => progress == null
+                ? child
+                : const SizedBox(
+                    height: 160,
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+            errorBuilder: (_, _, _) => Container(
+              height: 120,
+              alignment: Alignment.center,
+              color: const Color(0xFFF4F0ED),
+              child: const Text('图片暂时无法加载'),
+            ),
+          ),
+        ),
+      ),
+    );
+    cursor = match.end;
+  }
+  final tail = _plainTextFromHtml(raw.substring(cursor));
+  if (tail.isNotEmpty) {
+    widgets.add(Text(tail, style: const TextStyle(fontSize: 15, height: 1.75)));
+  }
+  return widgets;
+}
+
+String _normalizeArticleImageUrl(String source) {
+  final trimmed = source.trim();
+  if (trimmed.startsWith('/')) return 'https://app.saidian.cc$trimmed';
+  return trimmed
+      .replaceFirst('http://sd.cc/', 'https://app.saidian.cc/')
+      .replaceFirst('https://sd.cc/', 'https://app.saidian.cc/');
 }
 
 String _plainTextFromHtml(String raw) => raw
@@ -2589,6 +3120,21 @@ class DevicePage extends StatelessWidget {
                           const SizedBox(height: 8),
                           _ConnectionBadge(
                             label: _deviceStateLabel(controller.deviceState),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '设备同步：${controller.syncStatus}',
+                            style: const TextStyle(
+                              color: SaydianColors.muted,
+                              fontSize: 12,
+                            ),
+                          ),
+                          Text(
+                            '云端同步：${controller.cloudSyncStatus}',
+                            style: const TextStyle(
+                              color: SaydianColors.muted,
+                              fontSize: 12,
+                            ),
                           ),
                         ],
                       ),
@@ -2898,6 +3444,21 @@ class _DeviceSearchPageState extends State<DeviceSearchPage> {
     setState(() => _connectingDeviceId = null);
   }
 
+  Future<void> _openShop() async {
+    await widget.controller.stopDeviceScan();
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        settings: const RouteSettings(name: 'shop-home'),
+        builder: (_) => ShopHomePage(
+          controller: widget.controller,
+          ordersPageBuilder: (_) =>
+              OrdersPage(controller: widget.controller, initialStatus: null),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -3031,7 +3592,7 @@ class _DeviceSearchPageState extends State<DeviceSearchPage> {
                                               overflow: TextOverflow.ellipsis,
                                               style: const TextStyle(
                                                 color: SaydianColors.muted,
-                                                fontSize: 12,
+                                                fontSize: 14,
                                               ),
                                             ),
                                           ],
@@ -3055,7 +3616,7 @@ class _DeviceSearchPageState extends State<DeviceSearchPage> {
                                                 '${device.rssi ?? '--'}',
                                                 style: const TextStyle(
                                                   color: SaydianColors.muted,
-                                                  fontSize: 12,
+                                                  fontSize: 14,
                                                 ),
                                               ),
                                             ],
@@ -3100,6 +3661,21 @@ class _DeviceSearchPageState extends State<DeviceSearchPage> {
                         ],
                       ],
                     ),
+            ),
+            bottomNavigationBar: SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
+                child: TextButton.icon(
+                  key: const Key('device-shop-entry'),
+                  onPressed: connecting ? null : _openShop,
+                  icon: const Icon(Icons.shopping_bag_outlined),
+                  label: const Text(
+                    '没有设备？去赛电商城看看',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ),
             ),
           ),
         );
@@ -3500,7 +4076,7 @@ class CarePage extends StatelessWidget {
                             : '正在关爱 $memberCount 位家人',
                         style: const TextStyle(
                           color: SaydianColors.muted,
-                          fontSize: 12,
+                          fontSize: 14,
                         ),
                       ),
                     ],
@@ -3946,12 +4522,36 @@ class SettingsPage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 14),
-        Row(
-          children: [
-            Expanded(
-              child: _MySettingCard(
+        Card(
+          child: Column(
+            children: [
+              _MyQuickEntry(
+                key: const Key('my-add-device'),
+                title: '添加设备',
+                subtitle: '搜索并连接附近的赛电手表',
+                icon: Icons.watch_outlined,
+                color: SaydianColors.brandRed,
+                onTap: () => _openPage(
+                  context,
+                  DeviceSearchPage(controller: controller),
+                ),
+              ),
+              const Divider(height: 1, indent: 72),
+              _MyQuickEntry(
+                key: const Key('my-ai-question'),
+                title: 'AI提问',
+                subtitle: '向 AI 健康管家咨询健康问题',
+                icon: Icons.chat_bubble_outline_rounded,
+                color: SaydianColors.brandGoldDark,
+                onTap: () => _openPage(
+                  context,
+                  AiChatPage(controller: controller, app: 1),
+                ),
+              ),
+              const Divider(height: 1, indent: 72),
+              _MyQuickEntry(
                 title: '单位设置',
-                subtitle: '设置系统数据单位',
+                subtitle: '设置距离、温度等数据单位',
                 icon: Icons.straighten_rounded,
                 color: SaydianColors.blue,
                 onTap: () => _openPage(
@@ -3959,21 +4559,8 @@ class SettingsPage extends StatelessWidget {
                   UnitSettingsPage(controller: controller),
                 ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _MySettingCard(
-                title: '目标设置',
-                subtitle: '调整您的每日目标',
-                icon: Icons.track_changes_rounded,
-                color: SaydianColors.green,
-                onTap: () => _openPage(
-                  context,
-                  GoalSettingsPage(controller: controller),
-                ),
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
         const SizedBox(height: 14),
         Card(
@@ -3994,55 +4581,7 @@ class SettingsPage extends StatelessWidget {
                     ),
                   ),
                 ),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _MyServiceEntry(
-                        label: '账号设置',
-                        icon: Icons.manage_accounts_outlined,
-                        onTap: () => _openPage(
-                          context,
-                          AccountSettingsPage(controller: controller),
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: _MyServiceEntry(
-                        label: '权限管理',
-                        icon: Icons.admin_panel_settings_outlined,
-                        onTap: () => _openPage(
-                          context,
-                          PermissionManagementPage(controller: controller),
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: _MyServiceEntry(
-                        label: '帮助反馈',
-                        icon: Icons.help_outline_rounded,
-                        onTap: () => _openPage(context, const FeedbackPage()),
-                      ),
-                    ),
-                    Expanded(
-                      child: _MyServiceEntry(
-                        label: '联系客服',
-                        icon: Icons.headset_mic_outlined,
-                        onTap: () =>
-                            _openPage(context, const CustomerServicePage()),
-                      ),
-                    ),
-                    Expanded(
-                      child: _MyServiceEntry(
-                        label: '关于我们',
-                        icon: Icons.info_outline_rounded,
-                        onTap: () => _openPage(
-                          context,
-                          AboutSaydianPage(controller: controller),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+                _MyServicesGrid(controller: controller),
               ],
             ),
           ),
@@ -4060,6 +4599,102 @@ class SettingsPage extends StatelessWidget {
 
   void _openPage(BuildContext context, Widget page) {
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+  }
+}
+
+class _MyServicesGrid extends StatelessWidget {
+  const _MyServicesGrid({required this.controller});
+
+  final AppController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = <({String label, IconData icon, Widget page})>[
+      (
+        label: '账号设置',
+        icon: Icons.manage_accounts_outlined,
+        page: AccountSettingsPage(controller: controller),
+      ),
+      (
+        label: '权限管理',
+        icon: Icons.admin_panel_settings_outlined,
+        page: PermissionManagementPage(controller: controller),
+      ),
+      (
+        label: '帮助反馈',
+        icon: Icons.help_outline_rounded,
+        page: const FeedbackPage(),
+      ),
+      (
+        label: '联系客服',
+        icon: Icons.headset_mic_outlined,
+        page: const CustomerServicePage(),
+      ),
+      (
+        label: '关于我们',
+        icon: Icons.info_outline_rounded,
+        page: AboutSaydianPage(controller: controller),
+      ),
+    ];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final textScale = MediaQuery.textScalerOf(context).scale(1);
+        final columns = textScale > 1.25 || constraints.maxWidth < 340 ? 3 : 5;
+        final width = constraints.maxWidth / columns;
+        return Wrap(
+          alignment: WrapAlignment.start,
+          runSpacing: 10,
+          children: [
+            for (final entry in entries)
+              SizedBox(
+                width: width,
+                child: _MyServiceEntry(
+                  label: entry.label,
+                  icon: entry.icon,
+                  onTap: () => Navigator.of(
+                    context,
+                  ).push(MaterialPageRoute<void>(builder: (_) => entry.page)),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _MyQuickEntry extends StatelessWidget {
+  const _MyQuickEntry({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+    super.key,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      onTap: onTap,
+      minVerticalPadding: 12,
+      leading: _SettingsIcon(icon: icon, color: color),
+      title: Text(
+        title,
+        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+      ),
+      subtitle: Text(
+        subtitle,
+        style: const TextStyle(color: SaydianColors.muted, fontSize: 14),
+      ),
+      trailing: const Icon(Icons.chevron_right_rounded),
+    );
   }
 }
 
@@ -4085,7 +4720,12 @@ class _OrderEntry extends StatelessWidget {
           children: [
             Icon(icon, color: SaydianColors.ink, size: 28),
             const SizedBox(height: 8),
-            Text(label, style: const TextStyle(fontSize: 12)),
+            Text(
+              label,
+              maxLines: 2,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 14),
+            ),
           ],
         ),
       ),
@@ -4093,6 +4733,8 @@ class _OrderEntry extends StatelessWidget {
   }
 }
 
+// Retained for secondary settings layouts.
+// ignore: unused_element
 class _MySettingCard extends StatelessWidget {
   const _MySettingCard({
     required this.title,
@@ -4170,7 +4812,12 @@ class _MyServiceEntry extends StatelessWidget {
           children: [
             Icon(icon, color: const Color(0xFF516392), size: 25),
             const SizedBox(height: 7),
-            Text(label, maxLines: 1, style: const TextStyle(fontSize: 10)),
+            Text(
+              label,
+              maxLines: 2,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 14, height: 1.3),
+            ),
           ],
         ),
       ),
@@ -4752,7 +5399,8 @@ class AccountSettingsPage extends StatelessWidget {
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
                       settings: const RouteSettings(name: 'account-security'),
-                      builder: (_) => const SecurityCenterPage(),
+                      builder: (_) =>
+                          SecurityCenterPage(controller: controller),
                     ),
                   ),
                   leading: const Icon(Icons.security_outlined),
@@ -4780,7 +5428,15 @@ class AccountSettingsPage extends StatelessWidget {
           ),
           const SizedBox(height: 20),
           FilledButton(
-            onPressed: controller.isBusy ? null : controller.logout,
+            key: const Key('account-logout'),
+            onPressed: controller.isBusy
+                ? null
+                : () async {
+                    await controller.logout();
+                    if (context.mounted) {
+                      Navigator.of(context).popUntil((route) => route.isFirst);
+                    }
+                  },
             child: Text(controller.isPreviewMode ? '退出体验' : '退出登录'),
           ),
           TextButton(
@@ -5316,6 +5972,8 @@ class _SettingsIcon extends StatelessWidget {
   }
 }
 
+// Retained for secondary status layouts.
+// ignore: unused_element
 class _StatusCard extends StatelessWidget {
   const _StatusCard({
     required this.title,

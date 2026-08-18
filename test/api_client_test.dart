@@ -149,8 +149,9 @@ void main() {
     final client = MockClient((request) async {
       expect(request.method, 'GET');
       expect(request.url.path, '/api/rf-article/article/index');
+      expect(request.url.queryParameters, isEmpty);
       return http.Response(
-        '{"code":200,"data":[{"id":3,"title":"健康百科"}]}',
+        '{"code":200,"data":[{"id":3,"title":"健康百科","cover":"http://sd.cc"}]}',
         200,
         headers: {'content-type': 'application/json; charset=utf-8'},
       );
@@ -164,6 +165,70 @@ void main() {
     final articles = await api.getArticles();
 
     expect(articles.single['id'], 3);
+    expect(articles.single['cover'], 'https://app.saidian.cc');
+  });
+
+  test('article categories use parent id 3 by default', () async {
+    final client = MockClient((request) async {
+      expect(request.method, 'GET');
+      expect(request.url.path, '/api/rf-article/article-cate/index');
+      expect(request.url.queryParameters, {'pid': '3'});
+      return http.Response(
+        '{"code":200,"data":[{"id":8,"title":"慢病管理"}]}',
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    });
+    final api = SaydianApiClient(
+      MemorySessionVault(),
+      client: client,
+      baseUri: Uri.parse('https://example.invalid'),
+    );
+
+    final categories = await api.getArticleCategories();
+
+    expect(categories.single['id'], 8);
+  });
+
+  test('category article list sends category and page parameters', () async {
+    final client = MockClient((request) async {
+      expect(request.method, 'GET');
+      expect(request.url.path, '/api/rf-article/article/index');
+      expect(request.url.queryParameters, {'cate_id': '8', 'page': '2'});
+      return http.Response(
+        '{"code":200,"data":{"list":[{"id":11,"cover":"http://sd.cc/uploads/cover.png"}]}}',
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    });
+    final api = SaydianApiClient(
+      MemorySessionVault(),
+      client: client,
+      baseUri: Uri.parse('https://example.invalid'),
+    );
+
+    final articles = await api.getArticlesByCategory(categoryId: 8, page: 2);
+
+    expect(articles.single['id'], 11);
+    expect(
+      articles.single['cover'],
+      'https://app.saidian.cc/uploads/cover.png',
+    );
+  });
+
+  test('unfiltered paged article list omits category parameter', () async {
+    final client = MockClient((request) async {
+      expect(request.url.path, '/api/rf-article/article/index');
+      expect(request.url.queryParameters, {'page': '1'});
+      return http.Response('{"code":200,"data":[]}', 200);
+    });
+    final api = SaydianApiClient(
+      MemorySessionVault(),
+      client: client,
+      baseUri: Uri.parse('https://example.invalid'),
+    );
+
+    expect(await api.getArticlesByCategory(), isEmpty);
   });
 
   test('network failures are normalized to an offline ApiException', () async {
@@ -456,6 +521,106 @@ void main() {
       memberId: 7,
       settings: {'sleep', 'heart_rate'},
     );
+  });
+
+  test('SMS authentication uses the confirmed RageFrame contracts', () async {
+    var requestIndex = 0;
+    final client = MockClient((request) async {
+      requestIndex++;
+      expect(request.method, 'POST');
+      if (requestIndex == 1) {
+        expect(request.url.path, '/api/v1/site/sms-code');
+        expect(request.body, contains('name="mobile"'));
+        expect(request.body, contains('13800138000'));
+        expect(request.body, contains('name="usage"'));
+        expect(request.body, contains('register'));
+        return http.Response('{"code":200,"data":{}}', 200);
+      }
+      if (requestIndex == 2) {
+        expect(request.url.path, '/api/v1/site/register');
+        for (final field in const [
+          'mobile',
+          'code',
+          'password',
+          'password_repetition',
+          'nickname',
+          'group',
+        ]) {
+          expect(request.body, contains('name="$field"'));
+        }
+      } else {
+        expect(request.url.path, '/api/v1/site/up-pwd');
+        expect(request.body, contains('name="code"'));
+        expect(request.body, contains('up-password'));
+      }
+      return http.Response(
+        '{"code":200,"data":{"access_token":"access","refresh_token":"refresh","expiration_time":43200,"member":{"id":7,"nickname":"测试用户"}}}',
+        200,
+        headers: const {'content-type': 'application/json; charset=utf-8'},
+      );
+    });
+    final vault = MemorySessionVault();
+    final api = SaydianApiClient(
+      vault,
+      client: client,
+      baseUri: Uri.parse('https://example.invalid'),
+    );
+
+    await api.sendSmsCode(mobile: '13800138000', usage: 'register');
+    await api.registerWithSms(
+      mobile: '13800138000',
+      code: '1234',
+      password: 'register-password',
+      nickname: '测试用户',
+    );
+    await api.resetPassword(
+      mobile: '13800138000',
+      code: '5678',
+      password: 'up-password',
+    );
+
+    expect(requestIndex, 3);
+    expect(vault.session?.accessToken, 'access');
+  });
+
+  test('expired access token is refreshed without losing login state', () async {
+    final vault = MemorySessionVault()
+      ..session = Session(
+        accessToken: 'expired-access',
+        refreshToken: 'long-lived-refresh',
+        expiresAt: DateTime.now().toUtc().subtract(const Duration(minutes: 1)),
+        memberId: '7',
+        displayName: '长期登录用户',
+      );
+    var requestIndex = 0;
+    final client = MockClient((request) async {
+      requestIndex++;
+      if (requestIndex == 1) {
+        expect(request.method, 'POST');
+        expect(request.url.path, '/api/v1/site/refresh');
+        expect(request.body, contains('long-lived-refresh'));
+        expect(request.body, contains('name="group"'));
+        return http.Response(
+          '{"code":200,"data":{"access_token":"fresh-access","refresh_token":"fresh-refresh","expiration_time":43200,"member":{"id":7,"nickname":"长期登录用户"}}}',
+          200,
+          headers: const {'content-type': 'application/json; charset=utf-8'},
+        );
+      }
+      expect(request.url.path, '/api/v1/member/care/my');
+      expect(request.headers['authorization'], 'Bearer fresh-access');
+      return http.Response('{"code":200,"data":[]}', 200);
+    });
+    final api = SaydianApiClient(
+      vault,
+      client: client,
+      baseUri: Uri.parse('https://example.invalid'),
+    );
+
+    await api.getCareMembers();
+
+    expect(requestIndex, 2);
+    expect(vault.session?.accessToken, 'fresh-access');
+    expect(vault.session?.refreshToken, 'fresh-refresh');
   });
 }
 

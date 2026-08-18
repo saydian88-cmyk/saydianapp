@@ -79,6 +79,30 @@ abstract interface class SaydianApi {
   Future<void> deleteAccount();
 }
 
+abstract interface class SaydianSmsAuthApi {
+  Future<void> sendSmsCode({required String mobile, required String usage});
+  Future<Session> registerWithSms({
+    required String mobile,
+    required String code,
+    required String password,
+    required String nickname,
+  });
+  Future<Session> resetPassword({
+    required String mobile,
+    required String code,
+    required String password,
+  });
+  Future<Session> refreshSession(Session session);
+}
+
+abstract interface class SaydianArticleApi {
+  Future<List<Map<String, Object?>>> getArticleCategories({int parentId = 3});
+  Future<List<Map<String, Object?>>> getArticlesByCategory({
+    int? categoryId,
+    int page = 1,
+  });
+}
+
 abstract interface class SaydianShopApi {
   Future<Map<String, Object?>> getShopHome();
   Future<Map<String, Object?>> getShopProduct(int id);
@@ -122,7 +146,13 @@ abstract interface class SaydianCareApi {
   });
 }
 
-class SaydianApiClient implements SaydianApi, SaydianShopApi, SaydianCareApi {
+class SaydianApiClient
+    implements
+        SaydianApi,
+        SaydianSmsAuthApi,
+        SaydianArticleApi,
+        SaydianShopApi,
+        SaydianCareApi {
   SaydianApiClient(this._vault, {http.Client? client, Uri? baseUri})
     : _client = client ?? http.Client(),
       _baseUri =
@@ -137,6 +167,7 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi, SaydianCareApi {
   final SessionVault _vault;
   final http.Client _client;
   final Uri _baseUri;
+  Future<Session>? _refreshingSession;
 
   static const _requestTimeout = Duration(seconds: 20);
 
@@ -155,7 +186,63 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi, SaydianCareApi {
     {'mobile': mobile, 'password': password, 'group': 'app'},
   );
 
-  Future<Session> _authenticate(String path, Map<String, String> fields) async {
+  @override
+  Future<void> sendSmsCode({
+    required String mobile,
+    required String usage,
+  }) async {
+    final request = http.MultipartRequest('POST', _uri('/api/v1/site/sms-code'))
+      ..fields.addAll({'mobile': mobile.trim(), 'usage': usage});
+    _decode(await _sendMultipart(request));
+  }
+
+  @override
+  Future<Session> registerWithSms({
+    required String mobile,
+    required String code,
+    required String password,
+    required String nickname,
+  }) => _authenticate('/api/v1/site/register', {
+    'mobile': mobile.trim(),
+    'code': code.trim(),
+    'password': password,
+    'password_repetition': password,
+    'nickname': nickname.trim(),
+    'group': 'app',
+  });
+
+  @override
+  Future<Session> resetPassword({
+    required String mobile,
+    required String code,
+    required String password,
+  }) => _authenticate('/api/v1/site/up-pwd', {
+    'mobile': mobile.trim(),
+    'code': code.trim(),
+    'password': password,
+    'password_repetition': password,
+    'group': 'app',
+  });
+
+  @override
+  Future<Session> refreshSession(Session session) {
+    final pending = _refreshingSession;
+    if (pending != null) return pending;
+    final refresh = _authenticate('/api/v1/site/refresh', {
+      'refresh_token': session.refreshToken,
+      'group': 'app',
+    }, fallback: session);
+    _refreshingSession = refresh;
+    return refresh.whenComplete(() {
+      if (identical(_refreshingSession, refresh)) _refreshingSession = null;
+    });
+  }
+
+  Future<Session> _authenticate(
+    String path,
+    Map<String, String> fields, {
+    Session? fallback,
+  }) async {
     final request = http.MultipartRequest('POST', _uri(path))
       ..fields.addAll(fields);
     final response = await _sendMultipart(request);
@@ -163,14 +250,23 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi, SaydianCareApi {
     final data = _data(payload);
     final member = data['member'];
     final memberMap = member is Map ? member : const <Object?, Object?>{};
-    final expiresIn = (data['expiration_time'] as num?)?.toInt() ?? 43200;
+    final rawExpiration = (data['expiration_time'] as num?)?.toInt() ?? 43200;
+    final now = DateTime.now().toUtc();
+    final expiresAt = rawExpiration > 1000000000
+        ? DateTime.fromMillisecondsSinceEpoch(
+            rawExpiration > 1000000000000
+                ? rawExpiration
+                : rawExpiration * 1000,
+            isUtc: true,
+          )
+        : now.add(Duration(seconds: rawExpiration));
     final session = Session(
       accessToken: '${data['access_token'] ?? ''}',
-      refreshToken: '${data['refresh_token'] ?? ''}',
-      expiresAt: DateTime.now().toUtc().add(Duration(seconds: expiresIn)),
-      memberId: '${memberMap['id'] ?? ''}',
+      refreshToken: '${data['refresh_token'] ?? fallback?.refreshToken ?? ''}',
+      expiresAt: expiresAt,
+      memberId: '${memberMap['id'] ?? fallback?.memberId ?? ''}',
       displayName:
-          '${memberMap['nickname'] ?? memberMap['username'] ?? '赛电用户'}',
+          '${memberMap['nickname'] ?? memberMap['username'] ?? fallback?.displayName ?? '赛电用户'}',
     );
     if (session.accessToken.isEmpty) {
       throw const ApiException('登录响应缺少 access_token');
@@ -273,7 +369,35 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi, SaydianCareApi {
     final response = await _performRequest(
       () => _client.get(_uri('/api/rf-article/article/index')),
     );
+    return _normalizeArticles(_list(_decode(response)));
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> getArticleCategories({
+    int parentId = 3,
+  }) async {
+    final response = await _performRequest(
+      () => _client.get(
+        _uri('/api/rf-article/article-cate/index', {'pid': '$parentId'}),
+      ),
+    );
     return _list(_decode(response));
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> getArticlesByCategory({
+    int? categoryId,
+    int page = 1,
+  }) async {
+    final response = await _performRequest(
+      () => _client.get(
+        _uri('/api/rf-article/article/index', {
+          if (categoryId != null) 'cate_id': '$categoryId',
+          'page': '$page',
+        }),
+      ),
+    );
+    return _normalizeArticles(_list(_decode(response)));
   }
 
   @override
@@ -281,7 +405,7 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi, SaydianCareApi {
     final response = await _performRequest(
       () => _client.get(_uri('/api/rf-article/article/view', {'id': '$id'})),
     );
-    return _data(_decode(response));
+    return _normalizeArticle(_data(_decode(response)));
   }
 
   @override
@@ -625,8 +749,13 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi, SaydianCareApi {
   Future<Session> _requiredSession() async {
     final session = await _vault.readSession();
     if (session == null) throw const ApiException('请先登录', statusCode: 401);
-    if (session.isExpired) {
-      throw const FeatureNotConfiguredException('Token 刷新接口未配置');
+    if (session.expiresAt.isBefore(
+      DateTime.now().toUtc().add(const Duration(minutes: 5)),
+    )) {
+      if (session.refreshToken.trim().isEmpty) {
+        throw const ApiException('登录凭证不可刷新，请重新登录', statusCode: 401);
+      }
+      return refreshSession(session);
     }
     return session;
   }
@@ -675,6 +804,22 @@ class SaydianApiClient implements SaydianApi, SaydianShopApi, SaydianCareApi {
         .whereType<Map>()
         .map((value) => value.map((key, value) => MapEntry('$key', value)))
         .toList();
+  }
+
+  List<Map<String, Object?>> _normalizeArticles(
+    List<Map<String, Object?>> articles,
+  ) => articles.map(_normalizeArticle).toList();
+
+  Map<String, Object?> _normalizeArticle(Map<String, Object?> article) {
+    final cover = article['cover'];
+    if (cover is! String ||
+        (cover != 'http://sd.cc' && !cover.startsWith('http://sd.cc/'))) {
+      return article;
+    }
+    return <String, Object?>{
+      ...article,
+      'cover': cover.replaceFirst('http://sd.cc', 'https://app.saidian.cc'),
+    };
   }
 
   @override

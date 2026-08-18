@@ -1,50 +1,71 @@
-# 赛电 App 原型与视觉验收
+# 首页设计 QA
 
-日期：2026-08-12
+## 对比目标
 
-## 验收口径
+- source visual truth path: `C:\Users\admin\AppData\Local\Temp\codex-clipboard-f746bcd5-fa88-432c-a816-a8dcaf4ac6fe.png`
+- implementation screenshot path: `E:\saydian\赛电app\docs\saidian-home-device-20260818.png`
+- side-by-side comparison: `E:\saydian\赛电app\docs\home-visual-comparison-20260818.png`
+- state: 已登录首页；真机显示真实账号“测试00”，健康数据为空；参考图使用演示健康数值。
+- implementation device: Huawei JAD-AL00，Android 12。
+- source pixels: 853 × 1844；按 iOS 2× 设计稿理解，约 426.5 × 922 逻辑像素。
+- implementation pixels: 1228 × 2700；540 dpi，约 364 × 800 逻辑像素。
+- density normalization: 对比图仅将真机截图缩放到 853 × 1844 后并排，未将不同逻辑宽度误当成 1:1 像素差异。
 
-- 功能流程以 `http://sdapp.saidian.cc/` 为准，视觉以蓝湖最新画板为准。
-- Android 实机渲染统一使用 `390 x 844` 视口；另以 Widget 测试覆盖 `375 x 812`。
-- 对比图均为左侧设计参考、右侧当前 App，双方已归一到相同视口。
-- 接口和手表未提供的能力只展示可理解的不可用状态，不伪造成功、数据或支付结果。
+## Full-view comparison evidence
 
-## 同视口证据
+完整并排图确认以下结构与参考图一致：
 
-总览：`build/ui-audit-20260812/39-final-ui-comparison-contact-sheet.png`
+- 顶部品牌 Logo、问候语、状态副标题和通知入口。
+- 红金暖色 AI 健康管家主卡，左侧医生插画、右侧说明和“马上提问”。
+- 远程关爱、健康百科、健康预警、赛电商城四入口。
+- 健康数据标题、日期、全部数据入口。
+- 血压、心率、血氧、体温 2 × 2 健康卡。
+- 底部仅保留健康、设备、我的三栏导航。
 
-| 页面 | 设计参考 | App 截图 | 合并对比 |
-| --- | --- | --- | --- |
-| 登录 | `build/ui-audit-20260812/reference-login-390x844.png` | `build/ui-audit-20260812/37-release-login-390x844.png` | `build/ui-audit-20260812/compare-login-390x844.png` |
-| 首页 | `build/ui-audit-20260812/reference-home-390x844.png` | `build/ui-audit-20260812/32-implementation-home-390x844.png` | `build/ui-audit-20260812/compare-home-390x844.png` |
-| 健康 | `build/ui-audit-20260812/reference-health-390x844.png` | `build/ui-audit-20260812/33-implementation-health-390x844.png` | `build/ui-audit-20260812/compare-health-390x844.png` |
-| AI | `build/ui-audit-20260812/reference-ai-390x844.png` | `build/ui-audit-20260812/34-implementation-ai-390x844.png` | `build/ui-audit-20260812/compare-ai-390x844.png` |
-| 设备未连接 | `build/ui-audit-20260812/reference-device-unconnected-390x844.png` | `build/ui-audit-20260812/35-implementation-device-390x844.png` | `build/ui-audit-20260812/compare-device-unconnected-390x844.png` |
-| 我的 | `build/ui-audit-20260812/reference-profile-390x844.png` | `build/ui-audit-20260812/36-implementation-profile-390x844.png` | `build/ui-audit-20260812/compare-profile-390x844.png` |
+真机逻辑宽度比参考图窄约 15%，首屏只露出第一排健康卡；第二排通过自然滚动可见。这是设备尺寸差异，不是截断或溢出。
 
-## 对比迭代
+## Focused region comparison evidence
 
-### 第一轮
+重点检查了顶部、AI 主卡、四功能入口、健康标题和底部导航：
 
-- 清除正式页面中的连接实现、开发状态、原始错误和接口术语。
-- 将五栏导航、页面边距、卡片圆角、按钮形态、字号层级和空白背景统一到蓝湖的紧凑布局。
-- 登录、启动页和桌面图标统一使用项目中的真实赛电 Logo 素材。
-- 设备页按原型顺序补齐表盘和设备功能入口，并让未连接状态仍能说明每项能力需要什么条件。
+- Fonts and typography: 真机使用 Android 中文系统字体，参考图接近 iOS 中文系统字体；字号层级、粗细和可读性一致，真机略粗略大，符合既定适老化要求。未发现截断或不可读文字。
+- Spacing and layout rhythm: 横向边距、圆角、卡片分区和区块顺序一致；较窄真机上的纵向密度更高，但 1.5×/2× 系统字体回归无 RenderFlex 溢出。
+- Colors and visual tokens: 主红、暖白、金色描边、绿色状态和蓝色趋势色与参考方向一致；品牌红与成功/预警语义色保持分离。
+- Image quality and asset fidelity: 首页使用真实赛电 Logo；AI 医生为项目专用生成位图，裁切清晰，无占位图、字符图或代码绘图。
+- Copy and content: 问候语、AI 文案、按钮、四入口、健康数据与三栏导航均与参考图一致。日期与账号按真机实时数据显示。
 
-### 第二轮
+## Findings
 
-- 修正健康页在窄视口下的导航和长列表可见区域。
-- 收紧登录页垂直节奏，使协议确认区在 Release 首屏完整可见。
-- 将健康详情、共享管理、密码找回、反馈、客服、关于、购物车和售后等入口接到明确页面。
-- 设备功能统一按能力状态显示，已接通的查找手表和屏幕亮度执行真实操作，其余入口不会伪造完成结果。
-- 新增 `375 x 812` 全五栏无溢出测试，并保留 `390 x 844` 的页面流程测试。
+- [P3] 参考图与真机使用不同系统字体和逻辑宽度。
+  - Evidence: 参考图约 426.5 逻辑像素宽，真机约 364；Android 字体比参考图更粗。
+  - Impact: 只影响首屏可见健康卡数量，不影响结构、滚动或操作。
+  - Follow-up: 如后续指定统一字体文件或固定目标机型，再做逐像素微调。
 
-## 分级结论
+- [P3] 四个功能图标使用 Material 图标库中的最近匹配图标。
+  - Evidence: 入口含义、颜色和层级一致，但图标造型不是参考图中的定制 3D 图标。
+  - Impact: 不影响识别和使用。
+  - Follow-up: 客户提供正式图标素材后可直接替换。
 
-- P0：0。未发现阻断主流程、页面空白、崩溃或不可返回问题。
-- P1：0。未发现关键控件无响应、正式界面技术词外露或关键内容被裁切。
-- P2：0 个未处理项。保留的视觉差异均属于明确的产品取舍：当前登录继续使用已有账号密码接口；设备未连接页提前展示功能清单，避免用户连接后才知道可用内容。
+## Comparison history
 
-## 验收结果
+- Iteration 1: 参考图与真机首页完成同图并排检查；未发现可执行的 P0、P1 或 P2 差异，因此无需视觉返工。
+- Post-fix evidence: 本轮首页实现截图即为最终证据；全量 111 项 Flutter 测试、2× 字体回归和 Android Release 真机构建通过。
 
-Android 模拟器关键页面视觉验收通过。真实手表能力、Android 目标手机及 iPhone 的硬件闭环需要在对应设备上继续验证；该边界不以截图或模拟数据代替。
+## Primary interactions checked
+
+- AI 健康管家“马上提问”。
+- 远程关爱、健康百科、健康预警、赛电商城。
+- 全部数据二级页和运动入口。
+- 健康、设备、我的三栏导航。
+- 设备搜索页商城入口、我的页添加设备/AI 提问、退出登录。
+- Release 启动日志未发现 Flutter 运行时异常。
+
+## Implementation checklist
+
+- [x] 首页视觉层级与参考图一致。
+- [x] 旧健康页保留为全部数据二级页。
+- [x] AI 和运动管家不再占用底部导航。
+- [x] 三栏导航和适老化字体无溢出。
+- [x] 真机截图与参考图完成同图比较。
+
+final result: passed

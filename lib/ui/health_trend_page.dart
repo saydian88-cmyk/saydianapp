@@ -43,7 +43,7 @@ class HealthMetricMiniChart extends StatelessWidget {
                 records.isEmpty ? '暂无数据' : '仅 1 条记录',
                 style: const TextStyle(
                   color: SaydianColors.muted,
-                  fontSize: 10,
+                  fontSize: 13,
                 ),
               ),
             );
@@ -100,11 +100,13 @@ class HealthTrendPage extends StatefulWidget {
   const HealthTrendPage({
     required this.controller,
     required this.metric,
+    this.onMeasure,
     super.key,
   });
 
   final AppController controller;
   final HealthMetric metric;
+  final Future<void> Function()? onMeasure;
 
   @override
   State<HealthTrendPage> createState() => _HealthTrendPageState();
@@ -118,6 +120,7 @@ class _HealthTrendPageState extends State<HealthTrendPage> {
   String? _selectedValueKey;
   bool _loading = true;
   Object? _error;
+  bool _measuring = false;
   List<HealthRecord> _records = const [];
   List<HealthRecord> _previousRecords = const [];
 
@@ -133,7 +136,18 @@ class _HealthTrendPageState extends State<HealthTrendPage> {
   @override
   void initState() {
     super.initState();
+    widget.controller.addListener(_onControllerChanged);
     _load();
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onControllerChanged);
+    super.dispose();
+  }
+
+  void _onControllerChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _load() async {
@@ -205,8 +219,23 @@ class _HealthTrendPageState extends State<HealthTrendPage> {
     _load();
   }
 
+  Future<void> _measure() async {
+    final onMeasure = widget.onMeasure;
+    if (onMeasure == null || _measuring) return;
+    setState(() => _measuring = true);
+    try {
+      await onMeasure();
+      await _load();
+    } finally {
+      if (mounted) setState(() => _measuring = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final measurementEnabled =
+        widget.controller.connectedDevice != null &&
+        widget.controller.capabilities?.supports(widget.metric) == true;
     final range = HealthTrendRange.forPeriod(_period, _anchor);
     final rangeLabel = switch (_period) {
       HealthTrendPeriod.day => DateFormat('yyyy年M月d日').format(range.start),
@@ -256,6 +285,32 @@ class _HealthTrendPageState extends State<HealthTrendPage> {
                   icon: const Icon(Icons.chevron_right_rounded),
                 ),
               ],
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                key: Key('health-measure-${widget.metric.wireName}'),
+                onPressed:
+                    widget.onMeasure != null &&
+                        measurementEnabled &&
+                        !_measuring
+                    ? _measure
+                    : null,
+                icon: _measuring
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.monitor_heart_outlined),
+                label: Text(
+                  widget.onMeasure == null
+                      ? '该指标暂不支持手动测量'
+                      : measurementEnabled
+                      ? (_measuring ? '测量中' : '手动测量')
+                      : '连接支持该指标的手表后测量',
+                ),
+              ),
             ),
             const SizedBox(height: 14),
             if (_loading)
@@ -434,7 +489,7 @@ class _SummaryCard extends StatelessWidget {
                           value.$1,
                           style: const TextStyle(
                             color: SaydianColors.muted,
-                            fontSize: 12,
+                            fontSize: 14,
                           ),
                         ),
                         const SizedBox(height: 3),
@@ -453,7 +508,7 @@ class _SummaryCard extends StatelessWidget {
                 '较上一周期 ${change >= 0 ? '+' : ''}${change.toStringAsFixed(1)} $unit',
                 style: const TextStyle(
                   color: SaydianColors.muted,
-                  fontSize: 12,
+                  fontSize: 14,
                 ),
               ),
             ],
@@ -636,7 +691,7 @@ FlTitlesData _titles(HealthTrendData data) => FlTitlesData(
             : DateFormat('M/d').format(point.at);
         return Padding(
           padding: const EdgeInsets.only(top: 7),
-          child: Text(text, style: const TextStyle(fontSize: 10)),
+          child: Text(text, style: const TextStyle(fontSize: 13)),
         );
       },
     ),

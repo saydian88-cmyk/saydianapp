@@ -19,18 +19,7 @@ void main() {
     await tester.pumpAndSettle(const Duration(seconds: 2));
 
     expect(find.text('健康数据'), findsOneWidget);
-    for (final title in const [
-      '血压',
-      '血糖',
-      '血氧',
-      '体温',
-      '心电',
-      '心率',
-      'HRV',
-      '身体成分',
-      '睡眠',
-      '血液成分',
-    ]) {
+    for (final title in const ['血压', '心率', '血氧', '体温', '心电', 'HRV']) {
       expect(find.text(title), findsWidgets, reason: '$title 首页入口缺失');
     }
 
@@ -48,7 +37,7 @@ void main() {
     await tester.pageBack();
     await tester.pumpAndSettle();
 
-    controller.selectTab(3);
+    controller.selectTab(1);
     await tester.pumpAndSettle();
     if (controller.connectedDevice == null) {
       await controller.scanDevices();
@@ -145,13 +134,20 @@ void main() {
     expect(controller.deviceState, isNot(DeviceConnectionState.disconnected));
     debugPrint('ET488_RECONNECT_OK:$connectedId');
 
-    controller.selectTab(1);
+    controller.selectTab(0);
     await tester.pumpAndSettle();
-    for (final sport in const ['跑步', '步行', '骑行']) {
+    final sportEntries = find.byKey(const Key('health-sport-entries'));
+    await tester.scrollUntilVisible(
+      sportEntries,
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    for (final sport in const ['跑步', '步行', '骑行', '徒步', '运动记录']) {
       expect(find.text(sport), findsWidgets);
     }
 
-    controller.selectTab(4);
+    controller.selectTab(2);
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('联系客服'));
     await tester.tap(find.text('联系客服'));

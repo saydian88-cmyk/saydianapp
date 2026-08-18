@@ -99,6 +99,51 @@ void main() {
     expect(devices.map((device) => device.id), contains('veepoo:W9S-1'));
   });
 
+  test('scopes pulled W9S details and live metadata events', () async {
+    final veepoo = _FakeWearableBridge(
+      scanned: const [DeviceInfo(id: 'W9S-1', name: 'SD-watch-W9S')],
+      connectedDetails: const DeviceInfo(
+        id: 'W9S-1',
+        name: 'SD-watch-W9S',
+        firmwareVersion: '00.20.01',
+      ),
+    );
+    final bridge = RoutedWearableBridge(
+      veepoo: veepoo,
+      yucheng: _FakeWearableBridge(scanned: const []),
+    );
+    final received = <WearableEvent>[];
+    final subscription = bridge.events.listen(received.add);
+
+    await bridge.scanDevices();
+    await bridge.connect('veepoo:W9S-1', profile: _profile);
+    final details = await bridge.getConnectedDeviceDetails();
+    veepoo.emit(
+      const WearableEvent(
+        type: 'deviceDetails',
+        payload: {
+          'id': 'W9S-1',
+          'name': 'SD-watch-W9S',
+          'firmwareVersion': '00.20.01',
+        },
+      ),
+    );
+    veepoo.emit(
+      const WearableEvent(
+        type: 'syncProgress',
+        payload: {'deviceId': 'W9S-1', 'progress': 0.5},
+      ),
+    );
+    await pumpEventQueue();
+
+    expect(details?.id, 'veepoo:W9S-1');
+    expect(details?.firmwareVersion, '00.20.01');
+    expect(received[0].payload['id'], 'veepoo:W9S-1');
+    expect(received[1].payload['deviceId'], 'veepoo:W9S-1');
+    await subscription.cancel();
+    await bridge.dispose();
+  });
+
   test('drops live Veepoo W8 events and forwards the Yucheng event', () async {
     final veepoo = _FakeWearableBridge(scanned: const []);
     final yucheng = _FakeWearableBridge(scanned: const []);
@@ -150,10 +195,12 @@ const _profile = WearableUserProfile(
   targetSteps: 10000,
 );
 
-class _FakeWearableBridge extends Fake implements WearableBridge {
-  _FakeWearableBridge({required this.scanned});
+class _FakeWearableBridge extends Fake
+    implements WearableBridge, WearableDeviceDetailsBridge {
+  _FakeWearableBridge({required this.scanned, this.connectedDetails});
 
   final List<DeviceInfo> scanned;
+  final DeviceInfo? connectedDetails;
   final _events = StreamController<WearableEvent>.broadcast();
   final List<String> connectCalls = [];
   final List<HealthMetric> measurementCalls = [];
@@ -168,6 +215,8 @@ class _FakeWearableBridge extends Fake implements WearableBridge {
     _events.add(WearableEvent(type: 'scanDevice', payload: device.toJson()));
   }
 
+  void emit(WearableEvent event) => _events.add(event);
+
   @override
   Future<void> connect(
     String deviceId, {
@@ -175,6 +224,9 @@ class _FakeWearableBridge extends Fake implements WearableBridge {
   }) async {
     connectCalls.add(deviceId);
   }
+
+  @override
+  Future<DeviceInfo?> getConnectedDeviceDetails() async => connectedDetails;
 
   @override
   Future<void> startMeasurement(HealthMetric metric) async {

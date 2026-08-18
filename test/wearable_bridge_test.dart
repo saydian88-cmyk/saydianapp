@@ -54,4 +54,28 @@ void main() {
     );
     await expectLater(bridge.readSportRecords(), completes);
   });
+
+  test(
+    'pulls connected device details and preserves a null disconnect',
+    () async {
+      var connected = true;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(methods, (call) async {
+            if (call.method != 'getDeviceDetails' || !connected) return null;
+            return <Object?, Object?>{
+              'id': '38:23:A4:5E:CA:69',
+              'name': 'SD-watch-W9S',
+              'firmwareVersion': '00.20.01',
+            };
+          });
+      final bridge = MethodChannelWearableBridge(methods: methods);
+
+      final details = await bridge.getConnectedDeviceDetails();
+      expect(details?.id, '38:23:A4:5E:CA:69');
+      expect(details?.firmwareVersion, '00.20.01');
+
+      connected = false;
+      expect(await bridge.getConnectedDeviceDetails(), isNull);
+    },
+  );
 }

@@ -450,26 +450,40 @@ private final class VeepooWearableAdapter: WearableAdapter {
     emit("state", ["value": "measuring", "metric": metric])
     switch metric {
     case "heart_rate":
-      manager.peripheralManage.veepooSDKTestHeartStart(true) { [weak self] _, value in
-        if value > 0 { self?.emitRecord(type: metric, values: ["value": NSNumber(value: value)], unit: "bpm") }
+      manager.peripheralManage.veepooSDKTestHeartStart(true) { [weak self] state, value in
+        if state.rawValue == 1, (20...300).contains(value) {
+          self?.emitRecord(type: metric, values: ["value": NSNumber(value: value)], unit: "bpm")
+        }
       }
     case "blood_oxygen":
-      manager.peripheralManage.veepooSDKTestOxygenStart(true) { [weak self] _, value in
-        if value > 0 { self?.emitRecord(type: metric, values: ["value": NSNumber(value: value)], unit: "%") }
+      manager.peripheralManage.veepooSDKTestOxygenStart(true) { [weak self] state, value in
+        if state.rawValue == 1, (2...100).contains(value) {
+          self?.emitRecord(type: metric, values: ["value": NSNumber(value: value)], unit: "%")
+        }
       }
     case "blood_pressure":
-      manager.peripheralManage.veepooSDKTestBloodStart(true, testMode: 0) { [weak self] _, _, high, low in
-        if high > 0 && low > 0 {
+      manager.peripheralManage.veepooSDKTestBloodStart(true, testMode: 0) { [weak self] state, progress, high, low in
+        if state.rawValue == 4,
+           progress >= 100,
+           (60...300).contains(high),
+           (20...200).contains(low),
+           high > low {
           self?.emitRecord(type: metric, values: ["systolic": NSNumber(value: high), "diastolic": NSNumber(value: low)], unit: "mmHg")
         }
       }
     case "body_temperature":
-      manager.peripheralManage.veepooSDK_temperatureTestStart(true) { [weak self] _, _, _, value, _ in
-        if value > 0 { self?.emitRecord(type: metric, values: ["value": NSNumber(value: Double(value) / 10.0)], unit: "℃") }
+      manager.peripheralManage.veepooSDK_temperatureTestStart(true) { [weak self] state, busy, progress, value, _ in
+        let temperature = Double(value) / 10.0
+        if state.rawValue == 1,
+           !busy,
+           progress >= 100,
+           (20.0...45.0).contains(temperature) {
+          self?.emitRecord(type: metric, values: ["value": NSNumber(value: temperature)], unit: "℃")
+        }
       }
     case "blood_glucose":
-      manager.peripheralManage.veepooSDKTestBloodGlucoseStart(true, isPersonalModel: false) { [weak self] _, _, value, _ in
-        if value > 0 {
+      manager.peripheralManage.veepooSDKTestBloodGlucoseStart(true, isPersonalModel: false) { [weak self] state, progress, value, _ in
+        if state.rawValue == 1, progress >= 100, value > 0 {
           self?.emitRecord(type: metric, values: ["value": NSNumber(value: Double(value) / 100.0)], unit: "mmol/L")
         }
       }
@@ -478,7 +492,10 @@ private final class VeepooWearableAdapter: WearableAdapter {
         guard let self, let model else { return }
         let values = self.ecgValues(model)
         if !values.isEmpty {
-          self.emitRecord(type: metric, values: values, unit: "", samples: model.filterSignals.compactMap(Self.number))
+          let samples = model.filterSignals
+            .compactMap(Self.number)
+            .filter { $0.int64Value != Int64(Int32.max) }
+          self.emitRecord(type: metric, values: values, unit: "", samples: samples)
         }
       }
     case "body_composition":

@@ -63,7 +63,45 @@ void main() {
     expect(outcome.message, contains('未配置'));
     expect(await store.pending(), hasLength(1));
   });
+
+  test('quarantines SDK sentinel values instead of uploading them', () async {
+    final store = MemoryHealthStore();
+    final api = _AcceptingApi();
+    final service = HealthSyncService(store, api);
+    await store.initialize();
+    await store.upsert([
+      _measurement('invalid-heart', HealthMetric.heartRate, {'value': 1}),
+      _measurement('invalid-oxygen', HealthMetric.bloodOxygen, {'value': 1}),
+      _measurement('valid-heart', HealthMetric.heartRate, {'value': 78}),
+    ]);
+
+    final outcome = await service.synchronizeNow();
+
+    expect(outcome.uploaded, 1);
+    expect(outcome.rejected, 2);
+    expect(api.receivedIds, {'valid-heart'});
+    expect(await store.pending(), isEmpty);
+    expect((await store.recent()).map((record) => record.id), ['valid-heart']);
+  });
 }
+
+HealthRecord _measurement(
+  String id,
+  HealthMetric metric,
+  Map<String, num> values,
+) => HealthRecord(
+  id: id,
+  metric: metric,
+  values: values,
+  unit: metric.defaultUnit,
+  measuredAt: DateTime.utc(2026, 8, 15),
+  timezone: '+08:00',
+  deviceId: 'W9S',
+  firmwareVersion: 'test',
+  quality: 'device_reported',
+  source: MeasurementSource.wearable,
+  rawVersion: 1,
+);
 
 class _AcceptingApi extends _BaseFakeApi {
   final Set<String> receivedIds = {};
