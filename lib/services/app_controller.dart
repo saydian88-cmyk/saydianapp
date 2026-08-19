@@ -58,6 +58,9 @@ class AppController extends ChangeNotifier {
   int selectedTab = 0;
   String? errorMessage;
   String? measurementErrorMessage;
+  int measurementProgress = 0;
+  bool measurementWearConfirmed = true;
+  List<num> measurementSamples = const [];
   String storageStatus = '正在准备数据';
   String sdkStatus = '等待连接';
   String syncStatus = '尚未同步';
@@ -615,6 +618,9 @@ class AppController extends ChangeNotifier {
     _measurementTimeout?.cancel();
     _activeMeasurementMetric = null;
     measurementErrorMessage = null;
+    measurementProgress = 0;
+    measurementWearConfirmed = true;
+    measurementSamples = const [];
     errorMessage = null;
     if (connectedDevice == null) {
       errorMessage = '请先连接手表';
@@ -679,6 +685,9 @@ class AppController extends ChangeNotifier {
     _measurementTimeout?.cancel();
     _measurementTimeout = null;
     _activeMeasurementMetric = null;
+    measurementProgress = 0;
+    measurementWearConfirmed = true;
+    measurementSamples = const [];
     try {
       await _wearable.stopMeasurement(metric);
       if (deviceState == DeviceConnectionState.measuring) {
@@ -1317,11 +1326,15 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<Map<String, Object?>> loadCareMemberPreview(int id) async {
+  Future<Map<String, Object?>> loadCareMemberPreview(
+    int id, {
+    DateTime? day,
+  }) async {
     try {
+      final selected = day ?? DateTime.now();
       return await _api.getCareMemberPreview(
         id: id,
-        day: DateTime.now().toIso8601String().substring(0, 10),
+        day: selected.toIso8601String().substring(0, 10),
       );
     } on ApiException catch (error) {
       errorMessage = _apiErrorMessage(error, fallback: '对方数据暂时无法读取');
@@ -1609,6 +1622,7 @@ class AppController extends ChangeNotifier {
       'BODY_COMPOSITION_FAILED',
       'BLOOD_COMPONENT_FAILED',
       'ECG_MEASUREMENT_FAILED',
+      'ECG_NOT_WORN',
       'MEASUREMENT_COMMAND_FAILED',
     };
     return measurementErrors.contains(code);
@@ -1691,6 +1705,30 @@ class AppController extends ChangeNotifier {
         unawaited(_saveWearableRecord(record));
       } catch (_) {
         errorMessage = '收到无法识别的设备数据';
+      }
+    } else if (event.type == 'measurementProgress') {
+      final metric = HealthMetric.fromWire(
+        '${event.payload['metric'] ?? _activeMeasurementMetric?.wireName ?? ''}',
+      );
+      if (_activeMeasurementMetric == metric) {
+        measurementProgress =
+            (event.payload['progress'] as num?)
+                ?.toInt()
+                .clamp(0, 100)
+                .toInt() ??
+            measurementProgress;
+        measurementWearConfirmed =
+            '${event.payload['deviceState'] ?? ''}' != 'UNPASS_WEAR';
+        final samples = event.payload['samples'];
+        if (samples is List) {
+          final combined = <num>[
+            ...measurementSamples,
+            ...samples.whereType<num>(),
+          ];
+          measurementSamples = combined.length > 480
+              ? combined.sublist(combined.length - 480)
+              : combined;
+        }
       }
     } else if (event.type == 'cameraShutter') {
       cameraShutterSequence += 1;
@@ -1822,6 +1860,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> _saveWearableRecord(HealthRecord record) async {
     if (!hasSaneWearableTransportValues(record)) return;
+    final shouldStopMeasurement = _activeMeasurementMetric == record.metric;
     _measurementTimeout?.cancel();
     _measurementTimeout = null;
     _activeMeasurementMetric = null;
@@ -1844,6 +1883,15 @@ class AppController extends ChangeNotifier {
       deviceMachine.transition(DeviceConnectionState.ready);
     }
     if (!_disposed) notifyListeners();
+
+    if (shouldStopMeasurement) {
+      unawaited(
+        _wearable.stopMeasurement(record.metric).catchError((_) {
+          // The final record is authoritative. A delayed stop acknowledgement
+          // must not turn a completed measurement into a visible failure.
+        }),
+      );
+    }
 
     try {
       await _healthStore.upsert([record]);

@@ -19,6 +19,7 @@ import '../services/device_weather_service.dart';
 import 'app_theme.dart';
 import 'brand_assets.dart';
 import 'device_sdk_badge.dart';
+import 'watch_face_market_page.dart';
 
 class RegistrationPage extends StatefulWidget {
   const RegistrationPage({required this.controller, super.key});
@@ -1132,21 +1133,171 @@ class _CareInvitationsPageState extends State<CareInvitationsPage> {
   }
 }
 
-class HealthCalibrationPage extends StatelessWidget {
-  const HealthCalibrationPage({required this.metric, super.key});
+class HealthCalibrationPage extends StatefulWidget {
+  const HealthCalibrationPage({
+    required this.controller,
+    required this.metric,
+    super.key,
+  });
 
+  final AppController controller;
   final HealthMetric metric;
 
   @override
+  State<HealthCalibrationPage> createState() => _HealthCalibrationPageState();
+}
+
+class _HealthCalibrationPageState extends State<HealthCalibrationPage> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _primary;
+  late final TextEditingController _secondary;
+  bool _enabled = true;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _primary = TextEditingController(
+      text: widget.metric == HealthMetric.bloodPressure ? '120' : '5.5',
+    );
+    _secondary = TextEditingController(text: '80');
+  }
+
+  @override
+  void dispose() {
+    _primary.dispose();
+    _secondary.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving || !(_formKey.currentState?.validate() ?? false)) return;
+    setState(() => _saving = true);
+    final values = widget.metric == HealthMetric.bloodPressure
+        ? <String, Object?>{
+            'operation': 'bp_calibration',
+            'enabled': _enabled,
+            'systolic': int.tryParse(_primary.text.trim()) ?? 0,
+            'diastolic': int.tryParse(_secondary.text.trim()) ?? 0,
+          }
+        : <String, Object?>{
+            'operation': 'glucose_calibration',
+            'enabled': _enabled,
+            'value': double.tryParse(_primary.text.trim()) ?? 0,
+          };
+    final saved = await widget.controller.writeDeviceFeature(
+      DeviceFeature.healthMonitoring,
+      values,
+    );
+    if (!mounted) return;
+    setState(() => _saving = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          saved
+              ? '${widget.metric.label}校准已保存到手表'
+              : widget.controller.errorMessage ?? '校准保存失败，请稍后重试',
+        ),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final isBloodPressure = widget.metric == HealthMetric.bloodPressure;
     return Scaffold(
-      appBar: AppBar(title: Text('${metric.label}校准')),
-      body: const Padding(
-        padding: EdgeInsets.all(16),
-        child: FeatureStateCard(
-          message: '此功能暂时无法使用，请稍后再试',
-          detail: '校准需要与手表支持的方式完全一致，当前不会写入未经确认的数据。',
-          icon: Icons.tune_rounded,
+      appBar: AppBar(title: Text('${widget.metric.label}校准')),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            const FeatureStateCard(
+              message: '请使用刚刚由专业设备测得的数值',
+              detail: '校准值只适用于当前佩戴者。更换佩戴者后，请关闭或重新校准。',
+              icon: Icons.verified_user_outlined,
+              color: SaydianColors.info,
+            ),
+            const SizedBox(height: 14),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('启用校准'),
+                      subtitle: const Text('关闭后恢复手表公共测量模式'),
+                      value: _enabled,
+                      onChanged: _saving
+                          ? null
+                          : (value) => setState(() => _enabled = value),
+                    ),
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: _primary,
+                      enabled: _enabled && !_saving,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: InputDecoration(
+                        labelText: isBloodPressure ? '收缩压（高压）' : '血糖校准值',
+                        suffixText: isBloodPressure ? 'mmHg' : 'mmol/L',
+                      ),
+                      validator: (value) {
+                        if (!_enabled) return null;
+                        final number = double.tryParse(value?.trim() ?? '');
+                        if (number == null) return '请输入有效数值';
+                        if (isBloodPressure && (number < 60 || number > 300)) {
+                          return '收缩压需在 60–300 mmHg';
+                        }
+                        if (!isBloodPressure && (number < 1 || number > 30)) {
+                          return '血糖值需在 1.0–30.0 mmol/L';
+                        }
+                        return null;
+                      },
+                    ),
+                    if (isBloodPressure) ...[
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _secondary,
+                        enabled: _enabled && !_saving,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: '舒张压（低压）',
+                          suffixText: 'mmHg',
+                        ),
+                        validator: (value) {
+                          if (!_enabled) return null;
+                          final low = int.tryParse(value?.trim() ?? '');
+                          final high = int.tryParse(_primary.text.trim());
+                          if (low == null || low < 20 || low > 200) {
+                            return '舒张压需在 20–200 mmHg';
+                          }
+                          if (high != null && low >= high) {
+                            return '舒张压必须低于收缩压';
+                          }
+                          return null;
+                        },
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              key: Key('health-calibration-${widget.metric.wireName}'),
+              onPressed: _saving ? null : _save,
+              icon: _saving
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save_outlined),
+              label: Text(_saving ? '正在写入手表' : '保存校准'),
+            ),
+          ],
         ),
       ),
     );
@@ -1209,7 +1360,7 @@ class HealthRecordDetailPage extends StatelessWidget {
                     ListTile(
                       title: Text(_recordValueLabel(values[index].key)),
                       trailing: Text(
-                        '${values[index].value} ${record.unit}',
+                        '${values[index].value} ${_recordValueUnit(values[index].key)}',
                         style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
                     ),
@@ -1223,6 +1374,16 @@ class HealthRecordDetailPage extends StatelessWidget {
               record.samples.length > 1) ...[
             const SizedBox(height: 12),
             _EcgWaveformCard(samples: record.samples),
+          ],
+          if (record.metric == HealthMetric.ecg && values.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const FeatureStateCard(
+              message: '心电结果说明',
+              detail:
+                  '平均心率反映测量期间的心跳频率；HRV 反映相邻心跳间期变化；QT 间期为心室电活动时间参考。结果仅用于日常趋势观察，不能替代心电图诊断。',
+              icon: Icons.monitor_heart_outlined,
+              color: SaydianColors.brandRed,
+            ),
           ],
           const SizedBox(height: 12),
           const FeatureStateCard(
@@ -1239,7 +1400,16 @@ class HealthRecordDetailPage extends StatelessWidget {
   String _recordValueLabel(String key) => switch (key) {
     'systolic' => '收缩压',
     'diastolic' => '舒张压',
+    'meanHeartRate' || 'averageHeartRate' => '平均心率',
+    'averageHRV' || 'hrv' => 'HRV',
+    'averageTimeInterval' || 'qt' => 'QT 间期',
     _ => record.metric.label,
+  };
+
+  String _recordValueUnit(String key) => switch (key) {
+    'meanHeartRate' || 'averageHeartRate' => 'bpm',
+    'averageHRV' || 'hrv' || 'averageTimeInterval' || 'qt' => 'ms',
+    _ => record.unit,
   };
 }
 
@@ -1269,6 +1439,7 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
   bool _cameraRemoteStarted = false;
   int _seenCameraShutter = 0;
   XFile? _dialPhoto;
+  int _dialTimePosition = 0;
   final DeviceWeatherService _weatherService = DeviceWeatherService();
   bool _weatherRefreshing = false;
   String? _weatherMessage;
@@ -1550,64 +1721,108 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
   );
 
   Widget _buildWatchFacesPanel(bool busy) {
-    if (_featureData.isEmpty) return _loadingCard(busy, '手表表盘');
+    final noLocalData = _featureData.isEmpty;
     final faces = _items;
     final progress = (_featureData['progress'] as num?)?.toInt();
     return Column(
       children: [
+        Card(
+          color: SaydianColors.brandRedSoft,
+          child: ListTile(
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 18,
+              vertical: 6,
+            ),
+            leading: const Icon(
+              Icons.watch_rounded,
+              color: SaydianColors.brandRed,
+              size: 34,
+            ),
+            title: const Text(
+              '表盘商城',
+              style: TextStyle(fontWeight: FontWeight.w800),
+            ),
+            subtitle: const Text('浏览并下载更多 W9S 在线表盘'),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: busy
+                ? null
+                : () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => DeviceWatchFaceMarketPage(
+                        controller: widget.controller,
+                      ),
+                    ),
+                  ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        const Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            '手表中的表盘',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+          ),
+        ),
+        const SizedBox(height: 8),
         if (busy && progress != null && progress > 0) ...[
           LinearProgressIndicator(value: progress.clamp(0, 100) / 100),
           const SizedBox(height: 10),
           Text('正在读取表盘 $progress%'),
           const SizedBox(height: 12),
         ],
-        Card(
-          child: faces.isEmpty
-              ? const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Center(child: Text('手表中暂未读取到可切换的表盘')),
-                )
-              : Column(
-                  children: [
-                    for (var index = 0; index < faces.length; index++) ...[
-                      ListTile(
-                        minLeadingWidth: 64,
-                        leading: _WatchFaceThumbnail(
-                          face: faces[index],
-                          fallbackIndex: index,
+        if (noLocalData)
+          _loadingCard(busy, '手表中的表盘')
+        else
+          Card(
+            child: faces.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(child: Text('手表中暂未读取到可切换的表盘')),
+                  )
+                : Column(
+                    children: [
+                      for (var index = 0; index < faces.length; index++) ...[
+                        ListTile(
+                          minLeadingWidth: 64,
+                          leading: _WatchFaceThumbnail(
+                            face: faces[index],
+                            fallbackIndex: index,
+                          ),
+                          title: Text('${faces[index]['name'] ?? '手表表盘'}'),
+                          subtitle: Text(
+                            faces[index]['isCurrent'] == true
+                                ? '当前使用'
+                                : '${faces[index]['status'] ?? '手表表盘'}',
+                          ),
+                          trailing: faces[index]['isCurrent'] == true
+                              ? const Icon(
+                                  Icons.check_circle_rounded,
+                                  color: SaydianColors.green,
+                                )
+                              : TextButton(
+                                  onPressed: busy
+                                      ? null
+                                      : () => _switchWatchFace(faces[index]),
+                                  child: const Text('使用'),
+                                ),
                         ),
-                        title: Text('${faces[index]['name'] ?? '手表表盘'}'),
-                        subtitle: Text(
-                          faces[index]['isCurrent'] == true
-                              ? '当前使用'
-                              : '${faces[index]['status'] ?? '手表表盘'}',
-                        ),
-                        trailing: faces[index]['isCurrent'] == true
-                            ? const Icon(
-                                Icons.check_circle_rounded,
-                                color: SaydianColors.green,
-                              )
-                            : TextButton(
-                                onPressed: busy
-                                    ? null
-                                    : () => _switchWatchFace(faces[index]),
-                                child: const Text('使用'),
-                              ),
-                      ),
-                      if (index != faces.length - 1) const Divider(indent: 72),
+                        if (index != faces.length - 1)
+                          const Divider(indent: 72),
+                      ],
                     ],
-                  ],
-                ),
-        ),
-        const SizedBox(height: 12),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            onPressed: busy ? null : _loadFeature,
-            icon: const Icon(Icons.refresh_rounded),
-            label: const Text('刷新手表表盘'),
+                  ),
           ),
-        ),
+        if (!noLocalData) ...[
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: busy ? null : _loadFeature,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('刷新手表表盘'),
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -1655,6 +1870,29 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
                   child: Text(progress > 0 ? '正在传送到手表 $progress%' : '正在准备照片表盘'),
                 ),
               ],
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                child: DropdownButtonFormField<int>(
+                  initialValue: _dialTimePosition,
+                  decoration: const InputDecoration(
+                    labelText: '时间显示位置',
+                    prefixIcon: Icon(Icons.schedule_outlined),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 0, child: Text('顶部居中')),
+                    DropdownMenuItem(value: 1, child: Text('画面中央')),
+                    DropdownMenuItem(value: 2, child: Text('底部居中')),
+                    DropdownMenuItem(value: 3, child: Text('左上角')),
+                    DropdownMenuItem(value: 4, child: Text('右上角')),
+                    DropdownMenuItem(value: 5, child: Text('左下角')),
+                    DropdownMenuItem(value: 6, child: Text('右下角')),
+                  ],
+                  onChanged: busy
+                      ? null
+                      : (value) =>
+                            setState(() => _dialTimePosition = value ?? 0),
+                ),
+              ),
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: Row(
@@ -1712,7 +1950,11 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
     final photo = _dialPhoto;
     if (photo == null) return;
     await _saveFeature(
-      {'operation': 'upload_photo', 'imagePath': photo.path},
+      {
+        'operation': 'upload_photo',
+        'imagePath': photo.path,
+        'timePosition': _dialTimePosition,
+      },
       '照片表盘已设置',
       reload: false,
     );

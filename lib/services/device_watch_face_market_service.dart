@@ -1,0 +1,189 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
+
+class DeviceWatchFaceMarketException implements Exception {
+  const DeviceWatchFaceMarketException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+class DeviceWatchFaceMarketItem {
+  const DeviceWatchFaceMarketItem({
+    required this.name,
+    required this.fileUrl,
+    required this.previewUrl,
+    required this.fileLength,
+    required this.available,
+  });
+
+  final String name;
+  final Uri fileUrl;
+  final Uri previewUrl;
+  final int fileLength;
+  final bool available;
+
+  factory DeviceWatchFaceMarketItem.fromMap(Map<Object?, Object?> map) {
+    final fileUrl = Uri.tryParse('${map['fileUrl'] ?? ''}');
+    final previewUrl = Uri.tryParse('${map['previewUrl'] ?? ''}');
+    if (fileUrl == null ||
+        previewUrl == null ||
+        fileUrl.scheme != 'https' ||
+        previewUrl.scheme != 'https') {
+      throw const DeviceWatchFaceMarketException('表盘数据地址无效');
+    }
+    return DeviceWatchFaceMarketItem(
+      name: '${map['name'] ?? '在线表盘'}'.trim(),
+      fileUrl: fileUrl,
+      previewUrl: previewUrl,
+      fileLength: (map['fileLenght'] as num?)?.toInt() ?? 0,
+      available: map['available'] != false,
+    );
+  }
+}
+
+class DeviceWatchFaceMarketPageData {
+  const DeviceWatchFaceMarketPageData({
+    required this.pageIndex,
+    required this.pageCount,
+    required this.total,
+    required this.items,
+  });
+
+  final int pageIndex;
+  final int pageCount;
+  final int total;
+  final List<DeviceWatchFaceMarketItem> items;
+}
+
+/// Loads the W9S online watch-face catalogue used by the supplied mini-program.
+///
+/// The values below are the device profile passed by the original
+/// `veepooGetNetworDialManager` implementation for this W9S/JL platform. They
+/// describe the dial binary protocol, not the connected watch's BLE firmware.
+class DeviceWatchFaceMarketService {
+  DeviceWatchFaceMarketService({http.Client? client})
+    : _client = client ?? http.Client();
+
+  final http.Client _client;
+
+  static const _endpoint =
+      'https://www.vphband.com:9001/api/system/getthemespage';
+  static const _pageSize = 12;
+
+  Future<DeviceWatchFaceMarketPageData> loadPage({int page = 1}) async {
+    final uri = Uri.parse(_endpoint).replace(
+      queryParameters: {
+        'dialShape': '56',
+        'binProtocol': '2',
+        'maxLength': '614733',
+        'deviceNumber': '6702',
+        'deviceVersion': '11.95.01.00',
+        'appType': 'ios',
+        'appVersion': '1.28.7',
+        'pageIndex': '${page < 1 ? 1 : page}',
+        'pageSize': '$_pageSize',
+      },
+    );
+    http.Response response;
+    try {
+      response = await _client.get(uri).timeout(const Duration(seconds: 20));
+    } catch (_) {
+      throw const DeviceWatchFaceMarketException('网络不可用，请检查网络后重试');
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw const DeviceWatchFaceMarketException('表盘商城暂时无法访问，请稍后重试');
+    }
+    Object? decoded;
+    try {
+      decoded = jsonDecode(response.body);
+    } catch (_) {
+      throw const DeviceWatchFaceMarketException('表盘商城返回了无法识别的数据');
+    }
+    if (decoded is! Map) {
+      throw const DeviceWatchFaceMarketException('表盘商城返回了无法识别的数据');
+    }
+    final rawItems = decoded['results'];
+    final items = <DeviceWatchFaceMarketItem>[];
+    if (rawItems is List) {
+      for (final raw in rawItems.whereType<Map>()) {
+        try {
+          final item = DeviceWatchFaceMarketItem.fromMap(
+            raw.map((key, value) => MapEntry(key, value)),
+          );
+          if (item.available) items.add(item);
+        } on DeviceWatchFaceMarketException {
+          // Ignore an individual malformed item without hiding the catalogue.
+        }
+      }
+    }
+    return DeviceWatchFaceMarketPageData(
+      pageIndex: (decoded['pageIndex'] as num?)?.toInt() ?? page,
+      pageCount: (decoded['pageCount'] as num?)?.toInt() ?? 1,
+      total: (decoded['counts'] as num?)?.toInt() ?? items.length,
+      items: items,
+    );
+  }
+
+  Future<String> download(
+    DeviceWatchFaceMarketItem item, {
+    void Function(double progress)? onProgress,
+  }) async {
+    http.StreamedResponse response;
+    try {
+      final request = http.Request('GET', item.fileUrl);
+      response = await _client
+          .send(request)
+          .timeout(const Duration(seconds: 20));
+    } catch (_) {
+      throw const DeviceWatchFaceMarketException('表盘下载失败，请检查网络后重试');
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw const DeviceWatchFaceMarketException('表盘下载失败，请稍后重试');
+    }
+    final directory = Directory(
+      path.join((await getTemporaryDirectory()).path, 'saidian_watch_faces'),
+    );
+    await directory.create(recursive: true);
+    final safeName = item.name.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+    final file = File(
+      path.join(
+        directory.path,
+        '${safeName.isEmpty ? 'watch_face' : safeName}.bin',
+      ),
+    );
+    final sink = file.openWrite();
+    var received = 0;
+    try {
+      await for (final chunk in response.stream.timeout(
+        const Duration(seconds: 30),
+      )) {
+        sink.add(chunk);
+        received += chunk.length;
+        final expected = item.fileLength > 0
+            ? item.fileLength
+            : response.contentLength ?? 0;
+        if (expected > 0) onProgress?.call((received / expected).clamp(0, 1));
+      }
+      await sink.flush();
+    } catch (_) {
+      await sink.close();
+      if (await file.exists()) await file.delete();
+      throw const DeviceWatchFaceMarketException('表盘下载中断，请重试');
+    }
+    await sink.close();
+    if (received <= 0 || (item.fileLength > 0 && received != item.fileLength)) {
+      if (await file.exists()) await file.delete();
+      throw const DeviceWatchFaceMarketException('表盘文件不完整，请重新下载');
+    }
+    onProgress?.call(1);
+    return file.path;
+  }
+}

@@ -1,21 +1,23 @@
 import 'package:flutter/material.dart';
 
 abstract final class SaydianColors {
-  // Brand colors sampled from the red bag and its gold cord. Gold is an
-  // accent color; use goldText when text needs to sit on a light surface.
-  static const brandRed = Color(0xFF882818);
-  static const brandRedDark = Color(0xFF681818);
-  static const brandGold = Color(0xFFD8B848);
+  // The primary red follows the current logo. Deep ink and cool silver
+  // surfaces add the restrained technology feel requested for this revision.
+  static const brandRed = Color(0xFFD20B27);
+  static const brandRedDark = Color(0xFF980018);
+  static const brandGold = Color(0xFFD6B35A);
   static const brandGoldDark = Color(0xFF705300);
   static const goldText = brandGoldDark;
-  static const brandRedSoft = Color(0xFFF7E5E2);
-  static const brandGoldSoft = Color(0xFFFBF1CF);
+  static const brandRedSoft = Color(0xFFFFE8EC);
+  static const brandGoldSoft = Color(0xFFFFF6DE);
 
-  static const ink = Color(0xFF241714);
-  static const muted = Color(0xFF665852);
-  static const canvas = Color(0xFFFFF8F3);
-  static const line = Color(0xFFE3D5CF);
-  static const outline = Color(0xFFA98C82);
+  static const ink = Color(0xFF171B2B);
+  static const muted = Color(0xFF5F6675);
+  static const canvas = Color(0xFFF5F7FA);
+  static const line = Color(0xFFDDE3EC);
+  static const outline = Color(0xFF98A2B3);
+  static const techBlue = Color(0xFF316EF5);
+  static const techBlueSoft = Color(0xFFEAF1FF);
 
   // Semantic colors stay independent from the brand palette. This keeps a
   // successful/normal state green and a warning amber after the chrome turns
@@ -130,7 +132,8 @@ ThemeData buildSaydianTheme() {
       ),
     ),
     cardTheme: CardThemeData(
-      elevation: 0,
+      elevation: 1,
+      shadowColor: const Color(0x17151B2B),
       margin: EdgeInsets.zero,
       color: Colors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
@@ -255,11 +258,7 @@ ThemeData buildSaydianTheme() {
 }
 
 const saydianSoftGradient = LinearGradient(
-  colors: [
-    SaydianColors.brandRedSoft,
-    SaydianColors.canvas,
-    SaydianColors.brandGoldSoft,
-  ],
+  colors: [Color(0xFFFFF1F3), SaydianColors.canvas, SaydianColors.techBlueSoft],
   stops: [0, 0.5, 1],
   begin: Alignment.topLeft,
   end: Alignment.bottomRight,

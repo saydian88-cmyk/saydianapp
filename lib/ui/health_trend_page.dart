@@ -371,7 +371,7 @@ class _HealthTrendPageState extends State<HealthTrendPage> {
         Row(
           children: [
             const Text(
-              '全部数据',
+              '近期数据',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
             ),
             const Spacer(),
@@ -382,13 +382,23 @@ class _HealthTrendPageState extends State<HealthTrendPage> {
           ],
         ),
         const SizedBox(height: 10),
-        for (final record in data.records)
+        for (final record in data.records.take(6))
           Padding(
             padding: const EdgeInsets.only(bottom: 9),
             child: _RecordTile(
               controller: widget.controller,
               record: record,
               valueKey: data.valueKey,
+            ),
+          ),
+        if (data.records.length > 6)
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              key: Key('health-all-records-${widget.metric.wireName}'),
+              onPressed: () => _showAllRecords(data),
+              icon: const Icon(Icons.list_alt_rounded),
+              label: Text('查看全部 ${data.records.length} 条数据'),
             ),
           ),
       ],
@@ -401,6 +411,61 @@ class _HealthTrendPageState extends State<HealthTrendPage> {
       ),
     ];
   }
+
+  Future<void> _showAllRecords(HealthTrendData data) =>
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (context) => FractionallySizedBox(
+          heightFactor: .86,
+          child: SafeArea(
+            top: false,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 12, 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${widget.metric.label}全部数据',
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '${data.records.length} 条',
+                        style: const TextStyle(color: SaydianColors.muted),
+                      ),
+                      IconButton(
+                        tooltip: '关闭',
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(),
+                Expanded(
+                  child: ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                    itemCount: data.records.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 9),
+                    itemBuilder: (context, index) => _RecordTile(
+                      controller: widget.controller,
+                      record: data.records[index],
+                      valueKey: data.valueKey,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
 }
 
 class _MetricFieldSelector extends StatelessWidget {

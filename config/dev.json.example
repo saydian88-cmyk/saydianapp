@@ -1,3 +1,4 @@
 {
-  "SAYDIAN_API_BASE_URL": "https://app.saidian.cc"
+  "SAYDIAN_API_BASE_URL": "https://app.saidian.cc",
+  "QWEATHER_API_KEY": "replace-with-qweather-key"
 }

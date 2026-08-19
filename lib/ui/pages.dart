@@ -548,13 +548,20 @@ class _AiHealthAssistantCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final textScale = MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 2.0);
     final stacked = textScale >= 1.8;
-    final doctor = Align(
-      alignment: Alignment.bottomCenter,
-      child: Image.asset(
-        'assets/branding/ai-health-manager-doctor.png',
-        height: stacked ? 112 : 142,
-        fit: BoxFit.cover,
+    final doctor = ClipRect(
+      child: Align(
         alignment: Alignment.topCenter,
+        heightFactor: stacked ? .60 : .62,
+        child: Transform.scale(
+          scale: stacked ? 1.28 : 1.34,
+          alignment: Alignment.topCenter,
+          child: Image.asset(
+            'assets/branding/ai-health-manager-doctor.png',
+            height: stacked ? 162 : 202,
+            fit: BoxFit.contain,
+            alignment: Alignment.topCenter,
+          ),
+        ),
       ),
     );
     final content = Padding(
@@ -609,11 +616,11 @@ class _AiHealthAssistantCard extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFFFFFBF7), Color(0xFFFFF2EC)],
+          colors: [Color(0xFFFFF3F5), Color(0xFFF0F5FF)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        border: Border.all(color: const Color(0xFFF0C986), width: 1.5),
+        border: Border.all(color: const Color(0x66D20B27), width: 1.2),
         borderRadius: BorderRadius.circular(22),
       ),
       child: stacked
@@ -1051,8 +1058,12 @@ class _MetricCard extends StatelessWidget {
       HealthMetric.bloodPressure,
       HealthMetric.heartRate,
       HealthMetric.bloodOxygen,
+      HealthMetric.bloodGlucose,
       HealthMetric.bodyTemperature,
       HealthMetric.ecg,
+      HealthMetric.hrv,
+      HealthMetric.bodyComposition,
+      HealthMetric.bloodComposition,
     }.contains(metric);
     return GestureDetector(
       key: ValueKey('health-metric-${metric.name}'),
@@ -1278,9 +1289,6 @@ class HealthPage extends StatelessWidget {
     HealthMetric.hrv,
     HealthMetric.bodyComposition,
     HealthMetric.bloodComposition,
-    HealthMetric.steps,
-    HealthMetric.distance,
-    HealthMetric.calories,
     HealthMetric.sleep,
   ];
 
@@ -1357,6 +1365,7 @@ class HealthPage extends StatelessWidget {
                     HealthMetric.bloodGlucose,
                     HealthMetric.bodyTemperature,
                     HealthMetric.ecg,
+                    HealthMetric.hrv,
                     HealthMetric.bodyComposition,
                     HealthMetric.bloodComposition,
                   }.contains(metric)
@@ -1377,7 +1386,8 @@ class HealthPage extends StatelessWidget {
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
                       settings: const RouteSettings(name: 'bp-calibration'),
-                      builder: (_) => const HealthCalibrationPage(
+                      builder: (_) => HealthCalibrationPage(
+                        controller: controller,
                         metric: HealthMetric.bloodPressure,
                       ),
                     ),
@@ -1394,7 +1404,8 @@ class HealthPage extends StatelessWidget {
                       settings: const RouteSettings(
                         name: 'glucose-calibration',
                       ),
-                      builder: (_) => const HealthCalibrationPage(
+                      builder: (_) => HealthCalibrationPage(
+                        controller: controller,
                         metric: HealthMetric.bloodGlucose,
                       ),
                     ),
@@ -1468,7 +1479,9 @@ class _HealthMeasurementDialogState extends State<_HealthMeasurementDialog> {
   Future<void> _finish() async {
     if (_stopping) return;
     setState(() => _stopping = true);
-    await widget.controller.stopMeasurement(widget.metric);
+    final record = widget.controller.latestByMetric[widget.metric];
+    final completed = record != null && record.measuredAt.isAfter(_startedAt);
+    if (!completed) await widget.controller.stopMeasurement(widget.metric);
     if (mounted) Navigator.of(context).pop();
   }
 
@@ -1495,6 +1508,13 @@ class _HealthMeasurementDialogState extends State<_HealthMeasurementDialog> {
           final isNew = record != null && record.measuredAt.isAfter(_startedAt);
           final failure = widget.controller.measurementErrorMessage;
           final failed = !isNew && failure != null;
+          final waitingMessage = switch (widget.metric) {
+            HealthMetric.bloodPressure => '已通知手表进入血压测量，请按手表提示开始并保持正确姿势',
+            HealthMetric.ecg || HealthMetric.hrv => '请正确佩戴手表，并将手指持续贴在心电电极上',
+            HealthMetric.bodyComposition ||
+            HealthMetric.bloodComposition => '请按手表提示保持正确接触，测量完成前不要移动',
+            _ => '请保持正确佩戴并静止，等待手表返回结果',
+          };
           return AlertDialog(
             title: Text('${widget.metric.label}测量'),
             content: Column(
@@ -1519,7 +1539,7 @@ class _HealthMeasurementDialogState extends State<_HealthMeasurementDialog> {
                       ? '${_healthDisplayValue(record, widget.controller)} ${_healthDisplayUnit(widget.metric, record, widget.controller)}'
                       : failed
                       ? failure
-                      : '请保持正确佩戴并静止，等待手表返回结果',
+                      : waitingMessage,
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: isNew ? 24 : 16,
@@ -1527,9 +1547,39 @@ class _HealthMeasurementDialogState extends State<_HealthMeasurementDialog> {
                     height: 1.5,
                   ),
                 ),
+                if (!isNew &&
+                    !failed &&
+                    (widget.metric == HealthMetric.ecg ||
+                        widget.metric == HealthMetric.hrv) &&
+                    widget.controller.measurementSamples.length > 1) ...[
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    height: 92,
+                    width: double.infinity,
+                    child: CustomPaint(
+                      painter: _LiveEcgPainter(
+                        widget.controller.measurementSamples,
+                      ),
+                    ),
+                  ),
+                ],
                 if (!isNew && !failed) ...[
                   const SizedBox(height: 16),
-                  const LinearProgressIndicator(),
+                  LinearProgressIndicator(
+                    value: widget.controller.measurementProgress > 0
+                        ? widget.controller.measurementProgress / 100
+                        : null,
+                  ),
+                  if (widget.controller.measurementProgress > 0) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      '测量进度 ${widget.controller.measurementProgress}%',
+                      style: const TextStyle(
+                        color: SaydianColors.muted,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
                 ],
               ],
             ),
@@ -2326,8 +2376,75 @@ class HealthHistoryPage extends StatelessWidget {
   final HealthMetric metric;
 
   @override
-  Widget build(BuildContext context) =>
-      HealthTrendPage(controller: controller, metric: metric);
+  Widget build(BuildContext context) {
+    final canMeasure = const {
+      HealthMetric.heartRate,
+      HealthMetric.bloodOxygen,
+      HealthMetric.bloodPressure,
+      HealthMetric.bloodGlucose,
+      HealthMetric.bodyTemperature,
+      HealthMetric.ecg,
+      HealthMetric.hrv,
+      HealthMetric.bodyComposition,
+      HealthMetric.bloodComposition,
+    }.contains(metric);
+    return HealthTrendPage(
+      controller: controller,
+      metric: metric,
+      onMeasure: canMeasure
+          ? () => _showHealthMeasurementDialog(context, controller, metric)
+          : null,
+    );
+  }
+}
+
+class _LiveEcgPainter extends CustomPainter {
+  const _LiveEcgPainter(this.samples);
+
+  final List<num> samples;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final grid = Paint()
+      ..color = const Color(0x1AD20B27)
+      ..strokeWidth = 1;
+    for (var x = 0.0; x <= size.width; x += 18) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), grid);
+    }
+    for (var y = 0.0; y <= size.height; y += 18) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
+    }
+    final visible = samples.length > 180
+        ? samples.sublist(samples.length - 180)
+        : samples;
+    if (visible.length < 2) return;
+    final minimum = visible.reduce(math.min).toDouble();
+    final maximum = visible.reduce(math.max).toDouble();
+    final span = math.max(maximum - minimum, 1);
+    final path = Path();
+    for (var index = 0; index < visible.length; index++) {
+      final x = index / (visible.length - 1) * size.width;
+      final normalized = (visible[index].toDouble() - minimum) / span;
+      final y = size.height - normalized * (size.height - 10) - 5;
+      if (index == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = SaydianColors.brandRed
+        ..strokeWidth = 2
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _LiveEcgPainter oldDelegate) =>
+      oldDelegate.samples != samples;
 }
 
 class AiPage extends StatelessWidget {
@@ -4247,6 +4364,7 @@ class CareMemberPage extends StatefulWidget {
 class _CareMemberPageState extends State<CareMemberPage> {
   Map<String, Object?> _data = const {};
   bool _loading = true;
+  DateTime _day = DateTime.now();
 
   @override
   void initState() {
@@ -4255,7 +4373,10 @@ class _CareMemberPageState extends State<CareMemberPage> {
   }
 
   Future<void> _load() async {
-    final value = await widget.controller.loadCareMemberPreview(widget.careId);
+    final value = await widget.controller.loadCareMemberPreview(
+      widget.careId,
+      day: _day,
+    );
     if (mounted) {
       setState(() {
         _data = value;
@@ -4268,6 +4389,8 @@ class _CareMemberPageState extends State<CareMemberPage> {
   Widget build(BuildContext context) {
     final name =
         '${widget.member['nickname'] ?? widget.member['mobile'] ?? '关爱成员'}';
+    final todayItems = _mapList(_data['jrjk']);
+    final dailyItems = _mapList(_data['daily']);
     return Scaffold(
       appBar: AppBar(title: Text(name)),
       body: _loading
@@ -4277,41 +4400,342 @@ class _CareMemberPageState extends State<CareMemberPage> {
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 6,
+                      ),
+                      child: Row(
+                        children: [
+                          IconButton(
+                            tooltip: '前一天',
+                            onPressed: _loading ? null : () => _shiftDay(-1),
+                            icon: const Icon(Icons.chevron_left_rounded),
+                          ),
+                          Expanded(
+                            child: TextButton.icon(
+                              onPressed: _loading ? null : _pickDay,
+                              icon: const Icon(Icons.calendar_month_outlined),
+                              label: Text(DateFormat('yyyy年M月d日').format(_day)),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: '后一天',
+                            onPressed: _loading || _isToday(_day)
+                                ? null
+                                : () => _shiftDay(1),
+                            icon: const Icon(Icons.chevron_right_rounded),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
                   if (_data.isEmpty)
                     const _InlineNotice(
                       message: '对方尚未授权健康数据，或当前日期没有数据。',
                       icon: Icons.privacy_tip_outlined,
                       color: SaydianColors.orange,
                     )
-                  else
-                    for (final entry in _data.entries)
-                      Card(
-                        child: ListTile(
-                          title: Text(_careDataLabel(entry.key)),
-                          subtitle: Text(_careDataText(entry.value)),
-                        ),
+                  else ...[
+                    if (todayItems.isNotEmpty) ...[
+                      const _CareSectionTitle(
+                        title: '今日健康',
+                        subtitle: '成员授权共享的实时概况',
                       ),
+                      const SizedBox(height: 10),
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final itemWidth = (constraints.maxWidth - 10) / 2;
+                          return Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              for (final item in todayItems)
+                                SizedBox(
+                                  width: itemWidth,
+                                  child: _CareHealthCard(item: item),
+                                ),
+                            ],
+                          );
+                        },
+                      ),
+                    ],
+                    if (todayItems.isNotEmpty && dailyItems.isNotEmpty)
+                      const SizedBox(height: 20),
+                    if (dailyItems.isNotEmpty) ...[
+                      const _CareSectionTitle(
+                        title: '健康详情',
+                        subtitle: '活动、睡眠与身体指标摘要',
+                      ),
+                      const SizedBox(height: 10),
+                      for (final item in dailyItems) ...[
+                        _CareDailyCard(item: item),
+                        const SizedBox(height: 10),
+                      ],
+                    ],
+                    if (todayItems.isEmpty && dailyItems.isEmpty)
+                      const _InlineNotice(
+                        message: '当前日期没有可展示的授权数据。',
+                        icon: Icons.event_busy_outlined,
+                        color: SaydianColors.orange,
+                      ),
+                  ],
                 ],
               ),
             ),
     );
   }
 
-  String _careDataLabel(String key) => switch (key) {
-    'jrjk' => '今日健康',
-    'daily' => '活动与睡眠',
-    _ => key,
-  };
-
-  String _careDataText(Object? value) {
-    if (value is Map) {
-      return value.entries
-          .map((entry) => '${entry.key}：${entry.value}')
-          .join('\n');
-    }
-    if (value is List) return value.join('\n');
-    return '$value';
+  List<Map<String, Object?>> _mapList(Object? value) {
+    if (value is! List) return const [];
+    return value
+        .whereType<Map>()
+        .map((item) => item.map((key, value) => MapEntry('$key', value)))
+        .toList(growable: false);
   }
+
+  bool _isToday(DateTime value) {
+    final now = DateTime.now();
+    return value.year == now.year &&
+        value.month == now.month &&
+        value.day == now.day;
+  }
+
+  void _shiftDay(int offset) {
+    final candidate = _day.add(Duration(days: offset));
+    if (candidate.isAfter(DateTime.now())) return;
+    setState(() {
+      _day = candidate;
+      _loading = true;
+    });
+    unawaited(_load());
+  }
+
+  Future<void> _pickDay() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _day,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+      helpText: '选择关爱数据日期',
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _day = picked;
+      _loading = true;
+    });
+    await _load();
+  }
+}
+
+class _CareSectionTitle extends StatelessWidget {
+  const _CareSectionTitle({required this.title, required this.subtitle});
+
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        title,
+        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+      ),
+      const SizedBox(height: 2),
+      Text(
+        subtitle,
+        style: const TextStyle(color: SaydianColors.muted, fontSize: 14),
+      ),
+    ],
+  );
+}
+
+class _CareHealthCard extends StatelessWidget {
+  const _CareHealthCard({required this.item});
+
+  final Map<String, Object?> item;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = '${item['title'] ?? '健康指标'}';
+    final value = '${item['num'] ?? item['value'] ?? '--'}';
+    final unit = '${item['unit'] ?? ''}'.trim();
+    final percent = _careNumber(item['percent']).clamp(0, 100).toDouble();
+    final color = _careColor(item['color']);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.end,
+              spacing: 4,
+              children: [
+                Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 23,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                if (unit.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 2),
+                    child: Text(
+                      unit,
+                      style: const TextStyle(color: SaydianColors.muted),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            LinearProgressIndicator(
+              value: percent > 0 ? percent / 100 : 0,
+              color: color,
+              backgroundColor: color.withValues(alpha: .12),
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CareDailyCard extends StatelessWidget {
+  const _CareDailyCard({required this.item});
+
+  final Map<String, Object?> item;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = '${item['title'] ?? '健康详情'}';
+    final tips = '${item['tips'] ?? item['tip'] ?? ''}'.trim();
+    final summary = _careSummary(item);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: SaydianColors.brandRedSoft,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(
+                    Icons.monitor_heart_outlined,
+                    color: SaydianColors.brandRed,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (summary.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final entry in summary.entries)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 7,
+                      ),
+                      decoration: BoxDecoration(
+                        color: SaydianColors.techBlueSoft,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text('${entry.key}  ${entry.value}'),
+                    ),
+                ],
+              ),
+            ],
+            if (tips.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                tips,
+                style: const TextStyle(
+                  color: SaydianColors.muted,
+                  fontSize: 14,
+                  height: 1.45,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+num _careNumber(Object? value) =>
+    value is num ? value : num.tryParse('$value') ?? 0;
+
+Color _careColor(Object? value) {
+  final text = '${value ?? ''}'.trim().replaceFirst('#', '');
+  final parsed = int.tryParse(text, radix: 16);
+  if (parsed == null) return SaydianColors.techBlue;
+  return Color(text.length <= 6 ? 0xFF000000 | parsed : parsed);
+}
+
+Map<String, String> _careSummary(Map<String, Object?> item) {
+  const labels = <String, String>{
+    'num': '当前',
+    'value': '当前',
+    'max': '最高',
+    'min': '最低',
+    'avg': '平均',
+    'bmi': 'BMI',
+    'meanHeartRate': '平均心率',
+    'averageTimeInterval': '平均间期',
+    'deepSleep': '深睡',
+    'lightSleep': '浅睡',
+  };
+  final result = <String, String>{};
+  for (final entry in labels.entries) {
+    final value = item[entry.key];
+    if (value != null && '$value'.trim().isNotEmpty) {
+      result[entry.value] = '$value';
+    }
+  }
+  final body = item['bodycomposition'];
+  if (body is Map && body['BMI'] != null) result['BMI'] = '${body['BMI']}';
+  final ecg = item['ecgData'];
+  if (ecg is Map) {
+    if (ecg['meanHeartRate'] != null) {
+      result['平均心率'] = '${ecg['meanHeartRate']}';
+    }
+    if (ecg['averageTimeInterval'] != null) {
+      result['平均间期'] = '${ecg['averageTimeInterval']}';
+    }
+  }
+  return result;
 }
 
 class _AddCareDialog extends StatefulWidget {
@@ -4844,7 +5268,8 @@ class _OrdersPageState extends State<OrdersPage> {
     (0, '待支付'),
     (1, '待发货'),
     (2, '待收货'),
-    (3, '已完成'),
+    (3, '待评价'),
+    (4, '已完成'),
     (-1, '售后'),
   ];
 
@@ -4867,21 +5292,25 @@ class _OrdersPageState extends State<OrdersPage> {
       appBar: AppBar(title: const Text('我的订单')),
       body: Column(
         children: [
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Row(
-              children: [
-                for (final filter in _filters)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: ChoiceChip(
-                      label: Text(filter.$2),
-                      selected: _status == filter.$1,
-                      onSelected: (_) => _selectStatus(filter.$1),
+          DecoratedBox(
+            decoration: const BoxDecoration(color: Colors.white),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  for (final filter in _filters)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(filter.$2),
+                        selected: _status == filter.$1,
+                        showCheckmark: false,
+                        onSelected: (_) => _selectStatus(filter.$1),
+                      ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
           Expanded(
@@ -4897,10 +5326,29 @@ class _OrdersPageState extends State<OrdersPage> {
                       }).toList()
                     : widget.controller.orders;
                 if (orders.isEmpty) {
-                  return Center(
-                    child: Text(
-                      widget.controller.orderStatus,
-                      style: const TextStyle(color: SaydianColors.muted),
+                  return RefreshIndicator(
+                    onRefresh: () => widget.controller.loadOrders(
+                      _status == -1 ? null : _status,
+                    ),
+                    child: ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: [
+                        const SizedBox(height: 110),
+                        const Icon(
+                          Icons.receipt_long_outlined,
+                          size: 68,
+                          color: SaydianColors.outline,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          widget.controller.orderStatus,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: SaydianColors.muted,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ],
                     ),
                   );
                 }
@@ -4949,6 +5397,11 @@ class _OrderCard extends StatelessWidget {
       -3 => '已退款',
       _ => '订单处理中',
     };
+    final statusColor = status.contains('退款') || status.contains('售后')
+        ? SaydianColors.danger
+        : status == '已完成'
+        ? SaydianColors.success
+        : SaydianColors.brandRed;
     return Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
@@ -4968,15 +5421,22 @@ class _OrderCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Text(
-                    '订单 ${order['order_sn'] ?? order['id'] ?? ''}',
-                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  Expanded(
+                    child: Text(
+                      '订单号 ${order['order_sn'] ?? order['id'] ?? ''}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: SaydianColors.muted,
+                        fontSize: 14,
+                      ),
+                    ),
                   ),
-                  const Spacer(),
+                  const SizedBox(width: 10),
                   Text(
                     status,
-                    style: const TextStyle(
-                      color: SaydianColors.orange,
+                    style: TextStyle(
+                      color: statusColor,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -4984,27 +5444,119 @@ class _OrderCard extends StatelessWidget {
               ),
               for (final product in products.whereType<Map>()) ...[
                 const Divider(height: 24),
-                Text(
-                  '${product['product_name'] ?? '商品'} × ${product['num'] ?? 1}',
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${product['sku_name'] ?? ''}',
-                  style: const TextStyle(color: SaydianColors.muted),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _OrderProductImage(product: product),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${product['product_name'] ?? product['title'] ?? '商品'}',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 5),
+                          Text(
+                            '${product['sku_name'] ?? ''}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: SaydianColors.muted,
+                              fontSize: 14,
+                            ),
+                          ),
+                          const SizedBox(height: 9),
+                          Row(
+                            children: [
+                              Text(
+                                '¥${product['price'] ?? product['product_money'] ?? '--'}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const Spacer(),
+                              Text(
+                                '×${product['num'] ?? 1}',
+                                style: const TextStyle(
+                                  color: SaydianColors.muted,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ],
               const Divider(height: 24),
               Align(
                 alignment: Alignment.centerRight,
-                child: Text(
-                  '实付款 ¥${order['pay_money'] ?? '--'}',
-                  style: const TextStyle(fontWeight: FontWeight.w900),
+                child: Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 6,
+                  children: [
+                    Text(
+                      '共 ${products.length} 件',
+                      style: const TextStyle(
+                        color: SaydianColors.muted,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const Text('实付款'),
+                    Text(
+                      '¥${order['pay_money'] ?? '--'}',
+                      style: const TextStyle(
+                        color: SaydianColors.brandRed,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _OrderProductImage extends StatelessWidget {
+  const _OrderProductImage({required this.product});
+
+  final Map product;
+
+  @override
+  Widget build(BuildContext context) {
+    final raw =
+        product['product_picture'] ??
+        product['cover'] ??
+        product['image'] ??
+        product['product_image'];
+    final url = _normalizeArticleImageUrl('${raw ?? ''}');
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: SizedBox.square(
+        dimension: 78,
+        child: url.isEmpty
+            ? const ColoredBox(
+                color: SaydianColors.techBlueSoft,
+                child: Icon(Icons.shopping_bag_outlined),
+              )
+            : Image.network(
+                url,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => const ColoredBox(
+                  color: SaydianColors.techBlueSoft,
+                  child: Icon(Icons.shopping_bag_outlined),
+                ),
+              ),
       ),
     );
   }
