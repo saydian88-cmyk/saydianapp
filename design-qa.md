@@ -5,7 +5,7 @@
 - source visual truth path: `C:\Users\admin\AppData\Local\Temp\codex-clipboard-f746bcd5-fa88-432c-a816-a8dcaf4ac6fe.png`
 - implementation screenshot path: `E:\saydian\赛电app\docs\saidian-home-device-20260818.png`
 - side-by-side comparison: `E:\saydian\赛电app\docs\home-visual-comparison-20260818.png`
-- state: 已登录首页；真机显示真实账号“测试00”，健康数据为空；参考图使用演示健康数值。
+- state: 已登录首页；仓库内基线截图不包含真实健康数据。2026-08-19 的最新真机截图仅作为本地验收证据，不提交在线仓库。
 - implementation device: Huawei JAD-AL00，Android 12。
 - source pixels: 853 × 1844；按 iOS 2× 设计稿理解，约 426.5 × 922 逻辑像素。
 - implementation pixels: 1228 × 2700；540 dpi，约 364 × 800 逻辑像素。
@@ -49,7 +49,8 @@
 ## Comparison history
 
 - Iteration 1: 参考图与真机首页完成同图并排检查；未发现可执行的 P0、P1 或 P2 差异，因此无需视觉返工。
-- Post-fix evidence: 本轮首页实现截图即为最终证据；全量 111 项 Flutter 测试、2× 字体回归和 Android Release 真机构建通过。
+- Iteration 2: 根据真机反馈进一步缩小 AI 健康管家、健康数据卡和健康提示，维持适老化字号与点击区域。
+- Post-fix evidence: 本轮首页实现截图即为最终证据；全量 114 项 Flutter 测试、2× 字体回归和 Android Release 真机构建通过。
 
 ## Primary interactions checked
 

@@ -626,6 +626,12 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+    if (isDeviceSyncing) {
+      measurementErrorMessage = '手表数据正在同步，请稍后再测量';
+      errorMessage = measurementErrorMessage;
+      notifyListeners();
+      return false;
+    }
     try {
       _activeMeasurementMetric = metric;
       deviceMachine.transition(DeviceConnectionState.measuring);
@@ -1588,6 +1594,10 @@ class AppController extends ChangeNotifier {
       'HEART_LOW_BATTERY',
       'BLOOD_PRESSURE_FAILED',
       'BLOOD_PRESSURE_INVALID',
+      'BLOOD_PRESSURE_NOT_WORN',
+      'BLOOD_PRESSURE_WEAR_CHECK_FAILED',
+      'BLOOD_PRESSURE_LOW_BATTERY',
+      'BLOOD_PRESSURE_DEVICE_BUSY',
       'OXYGEN_UNSUPPORTED',
       'OXYGEN_NOT_WORN',
       'OXYGEN_DEVICE_BUSY',
@@ -1816,14 +1826,34 @@ class AppController extends ChangeNotifier {
     _measurementTimeout = null;
     _activeMeasurementMetric = null;
     measurementErrorMessage = null;
-    await _healthStore.upsert([record]);
-    await _refreshHealthRecordCache();
+
+    // Surface a valid device result immediately. Encrypted storage can take a
+    // noticeable amount of time on a physical phone and must not leave the
+    // measurement dialog looking as if the watch is still measuring.
+    final byId = <String, HealthRecord>{
+      for (final item in healthRecords) item.id: item,
+      record.id: record,
+    };
+    healthRecords = byId.values.toList()
+      ..sort((a, b) => b.measuredAt.compareTo(a.measuredAt));
+    if (healthRecords.length > 200) {
+      healthRecords = healthRecords.take(200).toList(growable: false);
+    }
     _evaluateHealthWarning(record);
     if (deviceState == DeviceConnectionState.measuring) {
       deviceMachine.transition(DeviceConnectionState.ready);
     }
-    notifyListeners();
-    unawaited(synchronizeCloud());
+    if (!_disposed) notifyListeners();
+
+    try {
+      await _healthStore.upsert([record]);
+      await _refreshHealthRecordCache();
+      if (!_disposed) notifyListeners();
+      unawaited(synchronizeCloud());
+    } catch (_) {
+      errorMessage = '测量结果已显示，但暂时无法保存到本机';
+      if (!_disposed) notifyListeners();
+    }
   }
 
   void _evaluateHealthWarning(HealthRecord record) {

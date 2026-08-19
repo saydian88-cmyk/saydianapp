@@ -32,6 +32,7 @@ import com.jieli.jl_rcsp.interfaces.watch.OnWatchOpCallback
 import com.jieli.jl_rcsp.model.base.BaseError
 import com.veepoo.protocol.VPOperateManager
 import com.veepoo.protocol.listener.IHealthRemindListener
+import com.veepoo.protocol.listener.IMiniCheckupOptListener
 import com.veepoo.protocol.listener.base.IABleConnectStatusListener
 import com.veepoo.protocol.listener.base.IBleWriteResponse
 import com.veepoo.protocol.listener.base.IConnectResponse
@@ -39,6 +40,7 @@ import com.veepoo.protocol.listener.base.INotifyResponse
 import com.veepoo.protocol.listener.data.IAutoMeasureSettingDataListener
 import com.veepoo.protocol.listener.data.IAlarm2DataListListener
 import com.veepoo.protocol.listener.data.IBPDetectDataListener
+import com.veepoo.protocol.listener.data.IBPSettingDataListener
 import com.veepoo.protocol.listener.data.IBloodComponentDetectListener
 import com.veepoo.protocol.listener.data.IBloodGlucoseChangeListener
 import com.veepoo.protocol.listener.data.IBodyComponentDetectListener
@@ -72,6 +74,7 @@ import com.veepoo.protocol.listener.data.IWeatherStatusDataListener
 import com.veepoo.protocol.listener.data.IWorldClockOptListener
 import com.veepoo.protocol.model.datas.BTInfo
 import com.veepoo.protocol.model.datas.BpData
+import com.veepoo.protocol.model.datas.BpSettingData
 import com.veepoo.protocol.model.datas.BloodComponent
 import com.veepoo.protocol.model.datas.BodyComponent
 import com.veepoo.protocol.model.datas.AutoMeasureData
@@ -92,6 +95,8 @@ import com.veepoo.protocol.model.datas.HRVOriginData
 import com.veepoo.protocol.model.datas.HeartData
 import com.veepoo.protocol.model.datas.HealthAlarmInterval
 import com.veepoo.protocol.model.datas.HealthRemind
+import com.veepoo.protocol.model.datas.MiniCheckupDetailData
+import com.veepoo.protocol.model.datas.MiniCheckupResultData
 import com.veepoo.protocol.model.datas.OriginData
 import com.veepoo.protocol.model.datas.OriginData3
 import com.veepoo.protocol.model.datas.OriginHalfHourData
@@ -124,6 +129,7 @@ import com.veepoo.protocol.model.enums.EDeviceStatus
 import com.veepoo.protocol.model.enums.EFunctionStatus
 import com.veepoo.protocol.model.enums.EHealthAlarmType
 import com.veepoo.protocol.model.enums.EHeartStatus
+import com.veepoo.protocol.model.enums.EMiniCheckupTestErrorCode
 import com.veepoo.protocol.model.enums.EMultiAlarmOprate
 import com.veepoo.protocol.model.enums.EOprateStauts
 import com.veepoo.protocol.model.enums.EPwdStatus
@@ -468,6 +474,12 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     private var watchDataDays = 3
     private var capabilities = defaultCapabilities()
     private var activeMetric: String? = null
+    private var bloodPressureStartGeneration = 0
+    private var pendingBloodPressureStart: ResultCallback<Unit>? = null
+    private var bloodPressureWearTimeoutTask: Runnable? = null
+    private var bloodPressureModeTimeoutTask: Runnable? = null
+    private var activeBloodPressureMode = EBPDetectModel.DETECT_MODEL_PUBLIC
+    private var activeBloodPressureUsesMiniCheckup = false
     private val autoMeasureSettings = mutableMapOf<String, AutoMeasureData>()
     private var lastScreenSetting: ScreenSetting? = null
     private var lastSocialMsgSetting: FunctionSocailMsgData? = null
@@ -3842,12 +3854,13 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             return
         }
         activeMetric = metric
+        Log.i(LOG_TAG, "measurement start metric=$metric device=$connectedDeviceId")
         emit("state", mapOf("value" to "measuring", "metric" to metric))
         when (metric) {
-            "heart_rate" -> manager.startDetectHeart(measurementWrite(callback), IHeartDataListener(::onHeartData))
-            "blood_pressure" -> manager.startDetectBP(measurementWrite(callback), IBPDetectDataListener(::onBloodPressureData), EBPDetectModel.DETECT_MODEL_PUBLIC)
-            "blood_oxygen" -> manager.startDetectSPO2H(measurementWrite(callback), ISpo2hDataListener(::onOxygenData))
-            "body_temperature" -> manager.startDetectTempture(measurementWrite(callback), ITemptureDetectDataListener(::onTemperatureData))
+            "heart_rate" -> manager.startDetectHeart(measurementWrite(callback), heartDataListener)
+            "blood_pressure" -> startBloodPressureMeasurement(callback)
+            "blood_oxygen" -> manager.startDetectSPO2H(measurementWrite(callback), oxygenDataListener)
+            "body_temperature" -> manager.startDetectTempture(measurementWrite(callback), temperatureDataListener)
             "blood_glucose" -> manager.startBloodGlucoseDetect(measurementWrite(callback), bloodGlucoseListener)
             "body_composition" -> manager.startDetectBodyComponent(measurementWrite(callback), bodyComponentListener)
             "blood_composition" -> manager.startDetectBloodComponent(measurementWrite(callback), false, bloodComponentListener)
@@ -3863,9 +3876,26 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         val response = measurementWrite(callback)
         when (metric) {
             "heart_rate" -> manager.stopDetectHeart(response)
-            "blood_pressure" -> manager.stopDetectBP(response, EBPDetectModel.DETECT_MODEL_PUBLIC)
-            "blood_oxygen" -> manager.stopDetectSPO2H(response, ISpo2hDataListener { })
-            "body_temperature" -> manager.stopDetectTempture(response, ITemptureDetectDataListener { })
+            "blood_pressure" -> {
+                cancelPendingBloodPressureStart()
+                if (activeBloodPressureUsesMiniCheckup) {
+                    manager.stopMiniCheckup(
+                        BleWriteResponse { code ->
+                            activeBloodPressureUsesMiniCheckup = false
+                            if (code == Code.REQUEST_SUCCESS) {
+                                callback.success(Unit)
+                            } else {
+                                callback.error("MEASUREMENT_STOP_FAILED", "暂时无法停止血压测量")
+                            }
+                        },
+                        miniCheckupBloodPressureListener,
+                    )
+                } else {
+                    manager.stopDetectBP(response, activeBloodPressureMode)
+                }
+            }
+            "blood_oxygen" -> manager.stopDetectSPO2H(response, oxygenDataListener)
+            "body_temperature" -> manager.stopDetectTempture(response, temperatureDataListener)
             "blood_glucose" -> manager.stopBloodGlucoseDetect(response, bloodGlucoseListener)
             "body_composition" -> manager.stopDetectBodyComponent(response)
             "blood_composition" -> manager.stopDetectBloodComponent(response)
@@ -3875,7 +3905,341 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         activeMetric = null
     }
 
+    private fun startBloodPressureMeasurement(callback: ResultCallback<Unit>) {
+        val generation = ++bloodPressureStartGeneration
+        pendingBloodPressureStart = callback
+        val preferences = VpSpGetUtil.getVpSpVariInstance(appContext)
+        if (preferences.isSupportMiniCheckup) {
+            Log.i(
+                LOG_TAG,
+                "blood pressure protocol miniCheckup=true type=${preferences.miniCheckupType}",
+            )
+            beginMiniCheckupBloodPressureMeasurement(generation)
+            return
+        }
+        bloodPressureWearTimeoutTask?.let(connectionHandler::removeCallbacks)
+        val wearTimeout =
+            Runnable {
+                runCatching { manager.stopDetectHeart { } }
+                failPendingBloodPressureStart(
+                    generation,
+                    "BLOOD_PRESSURE_NOT_WORN",
+                    "未检测到有效佩戴状态，请将手表贴合手腕后重新测量血压",
+                )
+            }
+        bloodPressureWearTimeoutTask = wearTimeout
+        connectionHandler.postDelayed(wearTimeout, BLOOD_PRESSURE_WEAR_TIMEOUT_MS)
+        manager.startDetectHeart(
+            IBleWriteResponse { code ->
+                if (code != Code.REQUEST_SUCCESS) {
+                    connectionHandler.post {
+                        failPendingBloodPressureStart(
+                            generation,
+                            "BLOOD_PRESSURE_WEAR_CHECK_FAILED",
+                            "暂时无法检测佩戴状态，请稍后重试",
+                        )
+                    }
+                }
+            },
+            bloodPressureWearListener,
+        )
+    }
+
+    private val bloodPressureWearListener =
+        object : IHeartDataListener {
+            override fun onDataChange(data: HeartData) {
+                connectionHandler.post {
+                    val generation = bloodPressureStartGeneration
+                    if (pendingBloodPressureStart == null || activeMetric != "blood_pressure") {
+                        return@post
+                    }
+                    Log.d(
+                        LOG_TAG,
+                        "blood pressure wear check status=${data.heartStatus} value=${data.data}",
+                    )
+                    when {
+                        data.heartStatus == EHeartStatus.STATE_HEART_NORMAL && data.data in 20..300 -> {
+                            bloodPressureWearTimeoutTask?.let(connectionHandler::removeCallbacks)
+                            bloodPressureWearTimeoutTask = null
+                            manager.stopDetectHeart(
+                                IBleWriteResponse { code ->
+                                    connectionHandler.post {
+                                        if (code == Code.REQUEST_SUCCESS) {
+                                            startBloodPressureProtocol(generation)
+                                        } else {
+                                            failPendingBloodPressureStart(
+                                                generation,
+                                                "BLOOD_PRESSURE_WEAR_CHECK_FAILED",
+                                                "佩戴检测未能结束，请稍后重试",
+                                            )
+                                        }
+                                    }
+                                },
+                            )
+                        }
+                        data.heartStatus == EHeartStatus.STATE_HEART_WEAR_ERROR -> {
+                            runCatching { manager.stopDetectHeart { } }
+                            failPendingBloodPressureStart(
+                                generation,
+                                "BLOOD_PRESSURE_NOT_WORN",
+                                "请正确佩戴手表后重新测量血压",
+                            )
+                        }
+                        data.heartStatus == EHeartStatus.STATE_LOW_BATTERY -> {
+                            runCatching { manager.stopDetectHeart { } }
+                            failPendingBloodPressureStart(
+                                generation,
+                                "BLOOD_PRESSURE_LOW_BATTERY",
+                                "手表电量过低，充电后再测量血压",
+                            )
+                        }
+                        data.heartStatus == EHeartStatus.STATE_HEART_BUSY -> {
+                            runCatching { manager.stopDetectHeart { } }
+                            failPendingBloodPressureStart(
+                                generation,
+                                "BLOOD_PRESSURE_DEVICE_BUSY",
+                                "手表正在处理其他任务，请稍后重试",
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun startBloodPressureProtocol(generation: Int) {
+        if (generation != bloodPressureStartGeneration || pendingBloodPressureStart == null) return
+        val preferences = VpSpGetUtil.getVpSpVariInstance(appContext)
+        Log.i(
+            LOG_TAG,
+            "blood pressure protocol miniCheckup=${preferences.isSupportMiniCheckup} " +
+                "type=${preferences.miniCheckupType}",
+        )
+        if (preferences.isSupportMiniCheckup) {
+            beginMiniCheckupBloodPressureMeasurement(generation)
+        } else {
+            readBloodPressureMode(generation)
+        }
+    }
+
+    private fun beginMiniCheckupBloodPressureMeasurement(generation: Int) {
+        if (generation != bloodPressureStartGeneration) return
+        val callback = pendingBloodPressureStart ?: return
+        manager.startMiniCheckup(
+            BleWriteResponse { code ->
+                connectionHandler.post {
+                    if (generation != bloodPressureStartGeneration || pendingBloodPressureStart == null) {
+                        return@post
+                    }
+                    if (code == Code.REQUEST_SUCCESS) {
+                        pendingBloodPressureStart = null
+                        activeBloodPressureUsesMiniCheckup = true
+                        Log.i(LOG_TAG, "blood pressure mini-checkup command accepted")
+                        callback.success(Unit)
+                    } else {
+                        Log.w(
+                            LOG_TAG,
+                            "blood pressure mini-checkup rejected code=$code; falling back to classic protocol",
+                        )
+                        activeBloodPressureUsesMiniCheckup = false
+                        readBloodPressureMode(generation)
+                    }
+                }
+            },
+            miniCheckupBloodPressureListener,
+        )
+    }
+
+    private fun readBloodPressureMode(generation: Int) {
+        if (generation != bloodPressureStartGeneration || pendingBloodPressureStart == null) return
+        bloodPressureModeTimeoutTask?.let(connectionHandler::removeCallbacks)
+        val timeout =
+            Runnable {
+                Log.w(LOG_TAG, "blood pressure mode read timed out; using public mode")
+                beginBloodPressureMeasurement(
+                    generation,
+                    EBPDetectModel.DETECT_MODEL_PUBLIC,
+                )
+            }
+        bloodPressureModeTimeoutTask = timeout
+        connectionHandler.postDelayed(timeout, BLOOD_PRESSURE_MODE_TIMEOUT_MS)
+        manager.readDetectBP(
+            IBleWriteResponse { code ->
+                if (code != Code.REQUEST_SUCCESS) {
+                    connectionHandler.post {
+                        Log.w(LOG_TAG, "blood pressure mode read rejected code=$code; using public mode")
+                        beginBloodPressureMeasurement(
+                            generation,
+                            EBPDetectModel.DETECT_MODEL_PUBLIC,
+                        )
+                    }
+                }
+            },
+            object : IBPSettingDataListener {
+                override fun onDataChange(data: BpSettingData) {
+                    connectionHandler.post {
+                        val mode =
+                            if (data.model == EBPDetectModel.DETECT_MODEL_PRIVATE &&
+                                data.highPressure in 60..300 &&
+                                data.lowPressure in 20..200
+                            ) {
+                                EBPDetectModel.DETECT_MODEL_PRIVATE
+                            } else {
+                                EBPDetectModel.DETECT_MODEL_PUBLIC
+                            }
+                        Log.i(
+                            LOG_TAG,
+                            "blood pressure mode status=${data.status} reported=${data.model} " +
+                                "high=${data.highPressure} low=${data.lowPressure} selected=$mode",
+                        )
+                        beginBloodPressureMeasurement(generation, mode)
+                    }
+                }
+            },
+        )
+    }
+
+    private fun beginBloodPressureMeasurement(
+        generation: Int,
+        mode: EBPDetectModel,
+    ) {
+        if (generation != bloodPressureStartGeneration) return
+        val callback = pendingBloodPressureStart ?: return
+        pendingBloodPressureStart = null
+        bloodPressureModeTimeoutTask?.let(connectionHandler::removeCallbacks)
+        bloodPressureModeTimeoutTask = null
+        activeBloodPressureMode = mode
+        activeBloodPressureUsesMiniCheckup = false
+        manager.startDetectBP(measurementWrite(callback), bloodPressureDataListener, mode)
+    }
+
+    private fun cancelPendingBloodPressureStart() {
+        bloodPressureStartGeneration += 1
+        pendingBloodPressureStart = null
+        bloodPressureWearTimeoutTask?.let(connectionHandler::removeCallbacks)
+        bloodPressureWearTimeoutTask = null
+        bloodPressureModeTimeoutTask?.let(connectionHandler::removeCallbacks)
+        bloodPressureModeTimeoutTask = null
+    }
+
+    private fun failPendingBloodPressureStart(
+        generation: Int,
+        code: String,
+        message: String,
+    ) {
+        if (generation != bloodPressureStartGeneration) return
+        val callback = pendingBloodPressureStart ?: return
+        pendingBloodPressureStart = null
+        bloodPressureWearTimeoutTask?.let(connectionHandler::removeCallbacks)
+        bloodPressureWearTimeoutTask = null
+        bloodPressureModeTimeoutTask?.let(connectionHandler::removeCallbacks)
+        bloodPressureModeTimeoutTask = null
+        activeMetric = null
+        callback.error(code, message)
+    }
+
+    // The vendor demo uses retained anonymous listener instances for manual
+    // measurements. Keeping the listeners strongly referenced also avoids the
+    // release optimizer turning operation-specific SAM adapters into callback
+    // types that the closed-source SDK cannot invoke reliably.
+    private val heartDataListener =
+        object : IHeartDataListener {
+            override fun onDataChange(data: HeartData) = onHeartData(data)
+        }
+
+    private val bloodPressureDataListener =
+        object : IBPDetectDataListener {
+            override fun onDataChange(data: BpData) = onBloodPressureData(data)
+        }
+
+    private val miniCheckupBloodPressureListener =
+        object : IMiniCheckupOptListener {
+            override fun onMiniCheckupTestProgress(progress: Int) {
+                Log.d(LOG_TAG, "blood pressure mini-checkup progress=$progress")
+            }
+
+            override fun onMiniCheckupStopSuccess() {
+                activeBloodPressureUsesMiniCheckup = false
+            }
+
+            override fun onMiniCheckupTestFailed(errorCode: EMiniCheckupTestErrorCode) {
+                val (code, message) =
+                    when (errorCode) {
+                        EMiniCheckupTestErrorCode.WEARING_ABNORMALITY ->
+                            "BLOOD_PRESSURE_NOT_WORN" to "请正确佩戴手表后重新测量血压"
+                        EMiniCheckupTestErrorCode.LOW_POWER ->
+                            "BLOOD_PRESSURE_LOW_BATTERY" to "手表电量过低，充电后再测量血压"
+                        EMiniCheckupTestErrorCode.DEVICE_BUSY ->
+                            "BLOOD_PRESSURE_DEVICE_BUSY" to "手表正在处理其他任务，请稍后重试"
+                        EMiniCheckupTestErrorCode.FUNCTION_NOT_SUPPORT ->
+                            "BLOOD_PRESSURE_FAILED" to "当前手表暂不支持此测量方式"
+                        else ->
+                            "BLOOD_PRESSURE_FAILED" to "本次血压测量未完成，请保持静止后重试"
+                    }
+                failMeasurement("blood_pressure", code, message)
+            }
+
+            override fun onMiniCheckupSuccess(data: MiniCheckupResultData) {
+                acceptMiniCheckupBloodPressure(
+                    data.systolicBloodPressure,
+                    data.diastolicBloodPressure,
+                )
+            }
+
+            override fun onMiniCheckupDetailTestSuccess(data: MiniCheckupDetailData) {
+                val photoelectric = data.bpPhotoelectric
+                val airPump = data.bpAirPump
+                val high =
+                    photoelectric?.systolicBloodPressure
+                        ?: airPump?.systolicBloodPressure
+                        ?: 0
+                val low =
+                    photoelectric?.diastolicBloodPressure
+                        ?: airPump?.diastolicBloodPressure
+                        ?: 0
+                acceptMiniCheckupBloodPressure(high, low)
+            }
+        }
+
+    private fun acceptMiniCheckupBloodPressure(high: Int, low: Int) {
+        Log.i(
+            LOG_TAG,
+            "measurement callback metric=blood_pressure protocol=mini_checkup high=$high low=$low active=$activeMetric",
+        )
+        if (high in 60..300 && low in 20..200 && high > low) {
+            if (claimMeasurementResult("blood_pressure")) {
+                emitRecord(
+                    record(
+                        "blood_pressure",
+                        mapOf("systolic" to high, "diastolic" to low),
+                        "mmHg",
+                        Date(),
+                    ),
+                )
+            }
+        } else {
+            failMeasurement(
+                "blood_pressure",
+                "BLOOD_PRESSURE_INVALID",
+                "本次血压结果无效，请保持静止后重试",
+            )
+        }
+    }
+
+    private val oxygenDataListener =
+        object : ISpo2hDataListener {
+            override fun onSpO2HADataChange(data: Spo2hData) = onOxygenData(data)
+        }
+
+    private val temperatureDataListener =
+        object : ITemptureDetectDataListener {
+            override fun onDataChange(data: TemptureDetectData) = onTemperatureData(data)
+        }
+
     private fun onHeartData(data: HeartData) {
+        Log.d(
+            LOG_TAG,
+            "measurement callback metric=heart_rate status=${data.heartStatus} value=${data.data} active=$activeMetric",
+        )
         if (data.heartStatus == EHeartStatus.STATE_HEART_NORMAL &&
             data.data in 20..300 &&
             claimMeasurementResult("heart_rate")
@@ -3895,6 +4259,11 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     }
 
     private fun onBloodPressureData(data: BpData) {
+        Log.i(
+            LOG_TAG,
+            "measurement callback metric=blood_pressure status=${data.status} progress=${data.progress} " +
+                "high=${data.highPressure} low=${data.lowPressure} active=$activeMetric",
+        )
         if (data.status == EBPDetectStatus.STATE_BP_NORMAL &&
             data.progress >= 100 &&
             data.highPressure in 60..300 &&
@@ -3920,6 +4289,11 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     }
 
     private fun onOxygenData(data: Spo2hData) {
+        Log.d(
+            LOG_TAG,
+            "measurement callback metric=blood_oxygen state=${data.spState}/${data.deviceState} " +
+                "value=${data.value} checking=${data.isChecking}/${data.checkingProgress} active=$activeMetric",
+        )
         if (data.spState == ESPO2HStatus.OPEN &&
             data.deviceState == EDeviceStatus.FREE &&
             data.value in 2..100 &&
@@ -3940,6 +4314,11 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     }
 
     private fun onTemperatureData(data: TemptureDetectData) {
+        Log.d(
+            LOG_TAG,
+            "measurement callback metric=body_temperature operation=${data.oprate} state=${data.deviceState} " +
+                "progress=${data.progress} value=${data.tempture} active=$activeMetric",
+        )
         if (data.oprate == 1 &&
             data.deviceState == 0 &&
             data.progress >= 100 &&
@@ -4082,9 +4461,11 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     private fun claimMeasurementResult(metric: String): Boolean =
         synchronized(this) {
             if (activeMetric != metric) {
+                Log.w(LOG_TAG, "measurement result ignored metric=$metric active=$activeMetric")
                 false
             } else {
                 activeMetric = null
+                Log.i(LOG_TAG, "measurement result accepted metric=$metric")
                 true
             }
         }
@@ -4105,7 +4486,14 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         runCatching {
             when (metric) {
                 "heart_rate" -> manager.stopDetectHeart(ignored)
-                "blood_pressure" -> manager.stopDetectBP(ignored, EBPDetectModel.DETECT_MODEL_PUBLIC)
+                "blood_pressure" -> {
+                    if (activeBloodPressureUsesMiniCheckup) {
+                        manager.stopMiniCheckup(BleWriteResponse { }, miniCheckupBloodPressureListener)
+                        activeBloodPressureUsesMiniCheckup = false
+                    } else {
+                        manager.stopDetectBP(ignored, activeBloodPressureMode)
+                    }
+                }
                 "blood_oxygen" -> manager.stopDetectSPO2H(ignored, ISpo2hDataListener { })
                 "body_temperature" -> manager.stopDetectTempture(ignored, ITemptureDetectDataListener { })
                 "blood_glucose" -> manager.stopBloodGlucoseDetect(ignored, bloodGlucoseListener)
@@ -4140,8 +4528,12 @@ private class VeepooWearableAdapter(context: android.content.Context) {
 
     private fun measurementWrite(callback: ResultCallback<Unit>) =
         IBleWriteResponse { code ->
-            if (code == Code.REQUEST_SUCCESS) callback.success(Unit)
+            if (code == Code.REQUEST_SUCCESS) {
+                Log.d(LOG_TAG, "measurement command accepted active=$activeMetric")
+                callback.success(Unit)
+            }
             else {
+                Log.w(LOG_TAG, "measurement command rejected code=$code active=$activeMetric")
                 synchronized(this) { activeMetric = null }
                 callback.error("MEASUREMENT_COMMAND_FAILED", "暂时无法开始测量，请稍后重试")
             }
@@ -4385,6 +4777,11 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         private const val CONNECTION_FLOW_TIMEOUT_MS = 180_000L
         private const val HEALTH_SYNC_IDLE_TIMEOUT_MS = 45_000L
         private const val DEVICE_SETTING_TIMEOUT_MS = 15_000L
+        // W9S needs about 12.4 seconds to return its first valid heart sample
+        // after the sensor starts. Keep enough margin so a correctly worn
+        // watch is not rejected just before that sample arrives.
+        private const val BLOOD_PRESSURE_WEAR_TIMEOUT_MS = 20_000L
+        private const val BLOOD_PRESSURE_MODE_TIMEOUT_MS = 4_000L
         private const val ALARM_CACHE_FALLBACK_MS = 1_000L
         private const val ALARM_CACHE_SETTLE_MS = 120L
         private const val ALARM_WRITE_VERIFY_DELAY_MS = 1_200L

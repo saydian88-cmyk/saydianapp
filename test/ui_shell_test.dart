@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:saydian_app/domain/feature_models.dart';
 import 'package:saydian_app/domain/models.dart';
@@ -38,6 +39,10 @@ void main() {
     );
 
     expect(find.byKey(const Key('dashboard-ai-assistant')), findsOneWidget);
+    expect(
+      tester.getSize(find.byKey(const Key('dashboard-ai-assistant'))).height,
+      lessThanOrEqualTo(170),
+    );
     expect(find.byKey(const Key('dashboard-functions')), findsOneWidget);
     expect(find.text('远程关爱'), findsOneWidget);
     expect(find.text('健康百科'), findsOneWidget);
@@ -101,6 +106,16 @@ void main() {
     for (final metric in homeMetrics) {
       expect(find.byKey(ValueKey('health-metric-$metric')), findsOneWidget);
     }
+    expect(
+      tester
+          .getSize(find.byKey(const ValueKey('health-metric-heartRate')))
+          .height,
+      lessThanOrEqualTo(150),
+    );
+    expect(
+      tester.getSize(find.byKey(const Key('dashboard-health-notice'))).height,
+      lessThanOrEqualTo(60),
+    );
     expect(
       find.byKey(const ValueKey('health-metric-bloodGlucose')),
       findsNothing,
@@ -437,6 +452,68 @@ void main() {
     },
   );
 
+  test('measurement waits until the device history sync is complete', () async {
+    final wearable = _TrackingMeasurementWearable();
+    final controller =
+        AppController(
+            MemorySessionVault(),
+            _NoopApi(),
+            MemoryHealthStore(),
+            wearable,
+          )
+          ..connectedDevice = const DeviceInfo(id: 'watch-1', name: 'QA Watch')
+          ..capabilities = const DeviceCapabilities(
+            metrics: {HealthMetric.heartRate},
+          )
+          ..isDeviceSyncing = true;
+    for (final state in const [
+      DeviceConnectionState.scanning,
+      DeviceConnectionState.connecting,
+      DeviceConnectionState.authenticating,
+      DeviceConnectionState.syncing,
+      DeviceConnectionState.ready,
+    ]) {
+      controller.deviceMachine.transition(state);
+    }
+    addTearDown(controller.dispose);
+
+    expect(await controller.startMeasurement(HealthMetric.heartRate), isFalse);
+    expect(wearable.starts, 0);
+    expect(controller.deviceState, DeviceConnectionState.ready);
+    expect(controller.errorMessage, contains('正在同步'));
+  });
+
+  test('blood pressure wear failure keeps the native guidance', () async {
+    final controller =
+        AppController(
+            MemorySessionVault(),
+            _NoopApi(),
+            MemoryHealthStore(),
+            _NotWornBloodPressureWearable(),
+          )
+          ..connectedDevice = const DeviceInfo(id: 'watch-1', name: 'QA Watch')
+          ..capabilities = const DeviceCapabilities(
+            metrics: {HealthMetric.bloodPressure},
+          );
+    for (final state in const [
+      DeviceConnectionState.scanning,
+      DeviceConnectionState.connecting,
+      DeviceConnectionState.authenticating,
+      DeviceConnectionState.syncing,
+      DeviceConnectionState.ready,
+    ]) {
+      controller.deviceMachine.transition(state);
+    }
+    addTearDown(controller.dispose);
+
+    expect(
+      await controller.startMeasurement(HealthMetric.bloodPressure),
+      isFalse,
+    );
+    expect(controller.deviceState, DeviceConnectionState.ready);
+    expect(controller.errorMessage, contains('贴合手腕'));
+  });
+
   testWidgets('health warning settings persist all three alarm switches', (
     tester,
   ) async {
@@ -576,6 +653,68 @@ void main() {
       );
       expect(controller.activeHealthWarningAlert?.message, contains('128 bpm'));
       expect(controller.healthWarningAlerts, hasLength(1));
+    },
+  );
+
+  test(
+    'valid wearable result is visible before encrypted storage finishes',
+    () async {
+      final wearable = _EventMeasurementWearable();
+      final store = _DelayedUpsertHealthStore();
+      final controller = AppController(
+        MemorySessionVault(),
+        _NoopApi(),
+        store,
+        wearable,
+      );
+      await controller.initialize();
+      controller.connectedDevice = const DeviceInfo(id: 'watch-1', name: 'W9S');
+      controller.capabilities = const DeviceCapabilities(
+        metrics: {HealthMetric.bloodOxygen},
+      );
+      for (final state in const [
+        DeviceConnectionState.scanning,
+        DeviceConnectionState.connecting,
+        DeviceConnectionState.authenticating,
+        DeviceConnectionState.syncing,
+        DeviceConnectionState.ready,
+      ]) {
+        controller.deviceMachine.transition(state);
+      }
+      await controller.startMeasurement(HealthMetric.bloodOxygen);
+      addTearDown(() async {
+        if (!store.release.isCompleted) store.release.complete();
+        controller.dispose();
+        await wearable.close();
+      });
+
+      wearable.emit(
+        WearableEvent(
+          type: 'healthRecord',
+          payload: HealthRecord(
+            id: 'oxygen-immediate-1',
+            metric: HealthMetric.bloodOxygen,
+            values: const {'value': 97},
+            unit: '%',
+            measuredAt: DateTime.now().toUtc(),
+            timezone: '+08:00',
+            deviceId: 'W9S',
+            firmwareVersion: '00.20.01',
+            quality: 'good',
+            source: MeasurementSource.wearable,
+            rawVersion: 1,
+          ).toJson(),
+        ),
+      );
+
+      expect(controller.deviceState, DeviceConnectionState.ready);
+      expect(controller.healthRecords.single.values['value'], 97);
+      expect(store.persistedRecords, isEmpty);
+
+      store.release.complete();
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(store.persistedRecords.single.values['value'], 97);
     },
   );
 
@@ -877,6 +1016,18 @@ class _EventMeasurementWearable extends _TrackingMeasurementWearable {
   Future<void> close() => _events.close();
 }
 
+class _DelayedUpsertHealthStore extends MemoryHealthStore {
+  final release = Completer<void>();
+  final persistedRecords = <HealthRecord>[];
+
+  @override
+  Future<void> upsert(List<HealthRecord> records) async {
+    await release.future;
+    persistedRecords.addAll(records);
+    await super.upsert(records);
+  }
+}
+
 class _FailingArticleApi extends _NoopApi {
   @override
   Future<List<Map<String, Object?>>> getArticlesByCategory({
@@ -896,5 +1047,15 @@ class _FailingMeasurementWearable extends _NoopWearable {
   @override
   Future<void> startMeasurement(HealthMetric metric) async {
     throw StateError('simulated start failure');
+  }
+}
+
+class _NotWornBloodPressureWearable extends _NoopWearable {
+  @override
+  Future<void> startMeasurement(HealthMetric metric) async {
+    throw PlatformException(
+      code: 'BLOOD_PRESSURE_NOT_WORN',
+      message: '未检测到有效佩戴状态，请将手表贴合手腕后重新测量血压',
+    );
   }
 }

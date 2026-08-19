@@ -444,7 +444,7 @@ class DashboardPage extends StatelessWidget {
               itemCount: metrics.length,
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 2,
-                mainAxisExtent: 205 + (textScale - 1) * 110,
+                mainAxisExtent: 142 + (textScale - 1) * 160,
                 crossAxisSpacing: 12,
                 mainAxisSpacing: 12,
               ),
@@ -459,9 +459,11 @@ class DashboardPage extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             const _InlineNotice(
+              key: Key('dashboard-health-notice'),
               message: '测量结果仅供健康管理参考，如有不适请咨询专业医务人员。',
               icon: Icons.health_and_safety_outlined,
               color: SaydianColors.green,
+              compact: true,
             ),
             const SizedBox(height: 22),
             const Text(
@@ -544,23 +546,19 @@ class _AiHealthAssistantCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final enlargedText = MediaQuery.textScalerOf(context).scale(1) > 1.25;
+    final textScale = MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 2.0);
+    final stacked = textScale >= 1.8;
     final doctor = Align(
       alignment: Alignment.bottomCenter,
       child: Image.asset(
         'assets/branding/ai-health-manager-doctor.png',
-        height: enlargedText ? 140 : 190,
+        height: stacked ? 112 : 142,
         fit: BoxFit.cover,
         alignment: Alignment.topCenter,
       ),
     );
     final content = Padding(
-      padding: EdgeInsets.fromLTRB(
-        enlargedText ? 18 : 6,
-        enlargedText ? 8 : 22,
-        18,
-        20,
-      ),
+      padding: EdgeInsets.fromLTRB(stacked ? 16 : 4, stacked ? 6 : 9, 14, 9),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -570,20 +568,20 @@ class _AiHealthAssistantCard extends StatelessWidget {
             'AI健康管家',
             style: TextStyle(
               color: Color(0xFF9E1025),
-              fontSize: 25,
+              fontSize: 21,
               fontWeight: FontWeight.w900,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 3),
           const Text(
             '我是您的健康管家，\n有任何健康问题都可以向我提问。',
             style: TextStyle(
               color: SaydianColors.ink,
-              fontSize: 15,
-              height: 1.5,
+              fontSize: 12.5,
+              height: 1.25,
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 7),
           FilledButton(
             key: const Key('dashboard-ai-ask'),
             onPressed: () => Navigator.of(context).push(
@@ -595,12 +593,12 @@ class _AiHealthAssistantCard extends StatelessWidget {
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFFD20B27),
               foregroundColor: Colors.white,
-              minimumSize: const Size.fromHeight(50),
+              minimumSize: const Size.fromHeight(44),
               shape: const StadiumBorder(),
             ),
             child: const Text(
               '马上提问',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+              style: TextStyle(fontSize: 15.5, fontWeight: FontWeight.w900),
             ),
           ),
         ],
@@ -618,7 +616,7 @@ class _AiHealthAssistantCard extends StatelessWidget {
         border: Border.all(color: const Color(0xFFF0C986), width: 1.5),
         borderRadius: BorderRadius.circular(22),
       ),
-      child: enlargedText
+      child: stacked
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [doctor, content],
@@ -626,8 +624,8 @@ class _AiHealthAssistantCard extends StatelessWidget {
           : Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Expanded(flex: 42, child: doctor),
-                Expanded(flex: 58, child: content),
+                Expanded(flex: 36, child: doctor),
+                Expanded(flex: 64, child: content),
               ],
             ),
     );
@@ -1075,35 +1073,62 @@ class _MetricCard extends StatelessWidget {
         shadowColor: const Color(0x1A6B4C42),
         surfaceTintColor: Colors.transparent,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+          padding: const EdgeInsets.fromLTRB(10, 9, 10, 8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
                   Container(
-                    width: 38,
-                    height: 38,
+                    width: 30,
+                    height: 30,
                     decoration: BoxDecoration(
                       color: iconColor.withValues(alpha: 0.11),
                       shape: BoxShape.circle,
                     ),
-                    child: Icon(icon, color: iconColor, size: 23),
+                    child: Icon(icon, color: iconColor, size: 18),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 6),
                   Expanded(
                     child: Text(
                       metric.label,
                       maxLines: 2,
                       style: const TextStyle(
-                        fontSize: 17,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: record == null
+                          ? const Color(0xFFF2EFED)
+                          : needsAttention
+                          ? const Color(0xFFFFE7E5)
+                          : const Color(0xFFE7F7E6),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      status,
+                      style: TextStyle(
+                        color: record == null
+                            ? SaydianColors.muted
+                            : needsAttention
+                            ? const Color(0xFFC62828)
+                            : const Color(0xFF27852A),
+                        fontSize: 11,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 9),
+              const SizedBox(height: 4),
               Wrap(
                 crossAxisAlignment: WrapCrossAlignment.end,
                 spacing: 6,
@@ -1112,7 +1137,7 @@ class _MetricCard extends StatelessWidget {
                   Text(
                     _healthDisplayValue(record, controller),
                     style: const TextStyle(
-                      fontSize: 29,
+                      fontSize: 23,
                       fontWeight: FontWeight.w900,
                     ),
                   ),
@@ -1124,33 +1149,6 @@ class _MetricCard extends StatelessWidget {
                     ),
                   ),
                 ],
-              ),
-              const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 3,
-                ),
-                decoration: BoxDecoration(
-                  color: record == null
-                      ? const Color(0xFFF2EFED)
-                      : needsAttention
-                      ? const Color(0xFFFFE7E5)
-                      : const Color(0xFFE7F7E6),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Text(
-                  status,
-                  style: TextStyle(
-                    color: record == null
-                        ? SaydianColors.muted
-                        : needsAttention
-                        ? const Color(0xFFC62828)
-                        : const Color(0xFF27852A),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
               ),
               const Spacer(),
               HealthMetricMiniChart(
@@ -6002,31 +6000,43 @@ class _StatusCard extends StatelessWidget {
 
 class _InlineNotice extends StatelessWidget {
   const _InlineNotice({
+    super.key,
     required this.message,
     required this.icon,
     required this.color,
+    this.compact = false,
   });
 
   final String message;
   final IconData icon;
   final Color color;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: compact
+          ? const EdgeInsets.symmetric(horizontal: 10, vertical: 8)
+          : const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.08),
         border: Border.all(color: color.withValues(alpha: 0.24)),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(compact ? 10 : 14),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: color, size: 20),
-          const SizedBox(width: 10),
+          Icon(icon, color: color, size: compact ? 16 : 20),
+          SizedBox(width: compact ? 7 : 10),
           Expanded(
-            child: Text(message, style: TextStyle(color: color, height: 1.45)),
+            child: Text(
+              message,
+              style: TextStyle(
+                color: color,
+                fontSize: compact ? 12.5 : null,
+                height: compact ? 1.3 : 1.45,
+              ),
+            ),
           ),
         ],
       ),
