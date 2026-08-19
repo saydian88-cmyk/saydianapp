@@ -560,12 +560,15 @@ class _AiHealthAssistantCard extends StatelessWidget {
             : Transform.scale(
                 scale: 1.34,
                 alignment: Alignment.center,
-                child: Image.asset(
-                  'assets/branding/ai-health-manager-doctor.png',
-                  width: double.infinity,
-                  height: double.infinity,
-                  fit: BoxFit.cover,
-                  alignment: Alignment.center,
+                child: Transform.translate(
+                  offset: const Offset(18, 0),
+                  child: Image.asset(
+                    'assets/branding/ai-health-manager-doctor.png',
+                    width: double.infinity,
+                    height: double.infinity,
+                    fit: BoxFit.cover,
+                    alignment: Alignment.center,
+                  ),
                 ),
               ),
       ),
@@ -621,11 +624,10 @@ class _AiHealthAssistantCard extends StatelessWidget {
       key: const Key('dashboard-ai-assistant'),
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFFFFF3F5), Color(0xFFF0F5FF)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+        color: const Color(0xFFFDF7F3),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      foregroundDecoration: BoxDecoration(
         border: Border.all(color: const Color(0x66D20B27), width: 1.2),
         borderRadius: BorderRadius.circular(22),
       ),

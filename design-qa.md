@@ -80,4 +80,13 @@
 - [x] 真机截图与参考图完成同图比较。
 - [x] AI 医生按参考图显示完整头肩和胸前白大褂。
 
+## Iteration 4 - AI card edge and background continuity
+
+- Trigger: the character still appeared too far left, both left rounded corners were incomplete, and the character-side background visibly split from the text-side background.
+- Fix: moved the character 18 dp to the right, replaced the split gradient with one uniform warm background (`#FDF7F3`), and painted the rounded border in the foreground so the image can never cover the two left corners.
+- True-device screenshot: `E:\saydian\tmp\design-qa-ai-card-0819\implementation-home-020-final.png`.
+- Focused side-by-side comparison: `E:\saydian\tmp\design-qa-ai-card-0819\comparison-ai-card-020.png`.
+- Full top-section comparison: `E:\saydian\tmp\design-qa-ai-card-0819\comparison-top-sections-020.png`.
+- Result: all four rounded corners are continuous; the character has clear left breathing room and remains separated from the text; no vertical color seam remains. No actionable P0, P1, or P2 visual mismatch was found.
+
 final result: passed
