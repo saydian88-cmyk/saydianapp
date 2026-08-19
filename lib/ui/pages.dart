@@ -548,20 +548,26 @@ class _AiHealthAssistantCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final textScale = MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 2.0);
     final stacked = textScale >= 1.8;
-    final doctor = ClipRect(
-      child: Align(
-        alignment: Alignment.topCenter,
-        heightFactor: stacked ? .60 : .62,
-        child: Transform.scale(
-          scale: stacked ? 1.28 : 1.34,
-          alignment: Alignment.topCenter,
-          child: Image.asset(
-            'assets/branding/ai-health-manager-doctor.png',
-            height: stacked ? 162 : 202,
-            fit: BoxFit.contain,
-            alignment: Alignment.topCenter,
-          ),
-        ),
+    final doctor = SizedBox(
+      height: stacked ? 210 : 160,
+      child: ClipRect(
+        child: stacked
+            ? Image.asset(
+                'assets/branding/ai-health-manager-doctor.png',
+                fit: BoxFit.contain,
+                alignment: Alignment.bottomCenter,
+              )
+            : Transform.scale(
+                scale: 1.34,
+                alignment: Alignment.center,
+                child: Image.asset(
+                  'assets/branding/ai-health-manager-doctor.png',
+                  width: double.infinity,
+                  height: double.infinity,
+                  fit: BoxFit.cover,
+                  alignment: Alignment.center,
+                ),
+              ),
       ),
     );
     final content = Padding(

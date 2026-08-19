@@ -50,7 +50,17 @@
 
 - Iteration 1: 参考图与真机首页完成同图并排检查；未发现可执行的 P0、P1 或 P2 差异，因此无需视觉返工。
 - Iteration 2: 根据真机反馈进一步缩小 AI 健康管家、健康数据卡和健康提示，维持适老化字号与点击区域。
-- Post-fix evidence: 本轮首页实现截图即为最终证据；全量 114 项 Flutter 测试、2× 字体回归和 Android Release 真机构建通过。
+- Iteration 3: 2026-08-19 根据“医生只显示一个头”的真机反馈，移除顶部高度裁切，改为 160 dp 固定展示区和居中缩放。初次 1.46 倍裁切已显示白大褂，但头发过于贴近卡片顶部（P2）；随后调整为 1.34 倍，完整显示头发、脸部、肩部和胸前白大褂。
+- Post-fix evidence: `E:\saydian\tmp\design-qa-ai-card-0819\comparison-top-sections.png` 和 `E:\saydian\tmp\design-qa-ai-card-0819\comparison-ai-card.png`。最终真机截图为 `E:\saydian\tmp\design-qa-ai-card-0819\implementation-home-final.png`。
+
+### AI 医生比例复验参数
+
+- 当前参考图: `C:\Users\admin\AppData\Local\Temp\codex-clipboard-ae4b724a-fc19-42cc-ac1f-d32a97129fef.png`，860 × 899 px。
+- 最终真机截图: 1228 × 2700 px，540 dpi；逻辑视口约 364 × 800 dp。
+- 聚焦参考裁切: `(25, 241)–(844, 625)`。
+- 聚焦实现裁切: `(54, 432)–(1174, 974)`。
+- 参考裁切以 aspect-fill 归一化到实现裁切的 1120 × 542 px 后，同图并排检查。
+- 结论: 医生占卡片左侧约三分之一，底部与卡片对齐，头部到胸前白大褂完整可见；不再是头像式裁切。当前红色边框和较大 Android 字体属于既有主题与适老化要求，不属于本次比例问题。
 
 ## Primary interactions checked
 
@@ -68,5 +78,6 @@
 - [x] AI 和运动管家不再占用底部导航。
 - [x] 三栏导航和适老化字体无溢出。
 - [x] 真机截图与参考图完成同图比较。
+- [x] AI 医生按参考图显示完整头肩和胸前白大褂。
 
 final result: passed
