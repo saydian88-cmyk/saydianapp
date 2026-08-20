@@ -1,0 +1,184 @@
+import 'models.dart';
+
+class HealthInterpretation {
+  const HealthInterpretation({required this.title, required this.detail});
+
+  final String title;
+  final String detail;
+}
+
+HealthInterpretation interpretHealthRecord(HealthRecord record) {
+  final values = record.values;
+  switch (record.metric) {
+    case HealthMetric.bloodPressure:
+      final high = values['systolic'];
+      final low = values['diastolic'];
+      if (high == null || low == null) return _insufficient;
+      if (high >= 140 || low >= 90) {
+        return const HealthInterpretation(
+          title: '本次读数偏高',
+          detail: '请静坐后再次测量；若多次偏高或伴有不适，请及时咨询专业医务人员。',
+        );
+      }
+      if (high < 90 || low < 60) {
+        return const HealthInterpretation(
+          title: '本次读数偏低',
+          detail: '请确认佩戴位置并静坐复测；如伴头晕、乏力等不适，请咨询专业医务人员。',
+        );
+      }
+      return const HealthInterpretation(
+        title: '本次读数处于常见参考范围',
+        detail: '单次结果会受姿势、运动和情绪影响，建议在相同条件下持续观察趋势。',
+      );
+    case HealthMetric.heartRate:
+      final value = values['value'];
+      if (value == null) return _insufficient;
+      if (value < 60 || value > 100) {
+        return const HealthInterpretation(
+          title: '本次静息心率超出常见参考范围',
+          detail: '运动、情绪和药物等都会影响心率；静坐复测后仍异常或有不适时请咨询医务人员。',
+        );
+      }
+      return const HealthInterpretation(
+        title: '本次静息心率处于常见参考范围',
+        detail: '建议结合个人长期趋势观察，不以单次结果作诊断。',
+      );
+    case HealthMetric.bloodOxygen:
+      final value = values['value'];
+      if (value == null) return _insufficient;
+      return value >= 95
+          ? const HealthInterpretation(
+              title: '本次血氧处于常见参考范围',
+              detail: '手指活动、佩戴松动和低温可能影响结果，请结合多次测量观察。',
+            )
+          : const HealthInterpretation(
+              title: '本次血氧偏低',
+              detail: '请保持静止并正确佩戴后复测；如持续偏低或伴呼吸不适，请及时就医。',
+            );
+    case HealthMetric.bodyTemperature:
+      final value = values['value'];
+      if (value == null) return _insufficient;
+      if (value > 37.3) {
+        return const HealthInterpretation(
+          title: '本次体温偏高',
+          detail: '手表测量受佩戴和环境影响，请用医用体温计复核；如有不适请咨询医务人员。',
+        );
+      }
+      if (value < 36) {
+        return const HealthInterpretation(
+          title: '本次体温偏低',
+          detail: '请在室内静坐并贴合佩戴后复测；持续异常时请使用医用体温计复核。',
+        );
+      }
+      return const HealthInterpretation(
+        title: '本次体温处于常见参考范围',
+        detail: '手表结果用于健康趋势管理，不能替代医用体温计。',
+      );
+    case HealthMetric.ecg:
+      if ((values['deviceAbnormalFlags'] ?? 0) > 0) {
+        return const HealthInterpretation(
+          title: '设备标记到需关注的心电特征',
+          detail: '该结果不是医学诊断；如反复出现或伴胸闷、心悸等不适，请携带记录咨询专业医务人员。',
+        );
+      }
+      return const HealthInterpretation(
+        title: '已生成本次心电趋势记录',
+        detail: '平均心率、HRV、QT 间期和波形仅用于日常观察，不能替代医疗级心电图诊断。',
+      );
+    case HealthMetric.hrv:
+      return const HealthInterpretation(
+        title: 'HRV 更适合观察个人长期趋势',
+        detail: '不同人的基线差异较大，请在相近时间和状态下比较，不以单次数值判断健康状况。',
+      );
+    case HealthMetric.bodyComposition:
+      return const HealthInterpretation(
+        title: '身体成分测量完成',
+        detail: '饮水、运动和电极接触会影响结果，建议在固定时段、相同条件下观察长期变化。',
+      );
+    case HealthMetric.bloodComposition:
+      return const HealthInterpretation(
+        title: '血液成分估算完成',
+        detail: '手表结果仅作趋势参考，不能替代医院采血化验；异常结果请以医疗机构检测为准。',
+      );
+    default:
+      return const HealthInterpretation(
+        title: '建议结合长期趋势观察',
+        detail: '单次结果可能受佩戴、运动和环境影响，如有不适请咨询专业医务人员。',
+      );
+  }
+}
+
+const _insufficient = HealthInterpretation(
+  title: '本次数据不足',
+  detail: '请确认手表正确佩戴后重新测量。',
+);
+
+String healthValueLabel(String key, HealthMetric metric) => switch (key) {
+  'value' => metric.label,
+  'systolic' => '收缩压',
+  'diastolic' => '舒张压',
+  'skinTemperature' => '皮肤温度',
+  'meanHeartRate' || 'averageHeartRate' => '平均心率',
+  'averageHRV' || 'hrv' => 'HRV',
+  'averageTimeInterval' || 'qt' => 'QT 间期',
+  'respiratoryRate' => '平均呼吸率',
+  'sampleFrequency' => '采样频率',
+  'deviceAbnormalFlags' => '设备异常标记数',
+  'diseaseRisk' => '设备风险指数',
+  'pressureIndex' => '压力指数',
+  'fatigueIndex' => '疲劳指数',
+  'bmi' || 'BMI' => 'BMI',
+  'bodyFatRate' || 'bodyFatPercentage' => '体脂率',
+  'fatMass' => '脂肪量',
+  'fatFreeMass' => '去脂体重',
+  'muscleRate' => '肌肉率',
+  'muscleMass' => '肌肉量',
+  'subcutaneousFat' => '皮下脂肪率',
+  'bodyWaterRate' || 'bodyMoisture' => '体水分率',
+  'waterMass' => '水分量',
+  'skeletalMuscleRate' => '骨骼肌率',
+  'boneMass' => '骨量',
+  'proteinRate' => '蛋白质率',
+  'proteinMass' => '蛋白质量',
+  'basalMetabolicRate' || 'basalMetabolism' => '基础代谢',
+  'uricAcid' => '尿酸',
+  'totalCholesterol' => '总胆固醇',
+  'triglycerides' => '甘油三酯',
+  'highDensityLipoprotein' => '高密度脂蛋白',
+  'lowDensityLipoprotein' => '低密度脂蛋白',
+  _ => key,
+};
+
+String healthValueUnit(String key, HealthRecord record) => switch (key) {
+  'meanHeartRate' || 'averageHeartRate' => 'bpm',
+  'averageHRV' || 'hrv' || 'averageTimeInterval' || 'qt' => 'ms',
+  'respiratoryRate' => '次/分',
+  'sampleFrequency' => 'Hz',
+  'deviceAbnormalFlags' ||
+  'diseaseRisk' ||
+  'pressureIndex' ||
+  'fatigueIndex' ||
+  'bmi' ||
+  'BMI' => '',
+  'bodyFatRate' ||
+  'bodyFatPercentage' ||
+  'muscleRate' ||
+  'subcutaneousFat' ||
+  'bodyWaterRate' ||
+  'bodyMoisture' ||
+  'skeletalMuscleRate' ||
+  'proteinRate' => '%',
+  'fatMass' ||
+  'fatFreeMass' ||
+  'muscleMass' ||
+  'waterMass' ||
+  'boneMass' ||
+  'proteinMass' => 'kg',
+  'basalMetabolicRate' || 'basalMetabolism' => 'kcal/日',
+  'uricAcid' => 'μmol/L',
+  'totalCholesterol' ||
+  'triglycerides' ||
+  'highDensityLipoprotein' ||
+  'lowDensityLipoprotein' => 'mmol/L',
+  _ => record.unit,
+};

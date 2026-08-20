@@ -152,12 +152,16 @@ class DeviceWatchFaceMarketService {
       path.join((await getTemporaryDirectory()).path, 'saidian_watch_faces'),
     );
     await directory.create(recursive: true);
-    final safeName = item.name.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+    // JL identifies dial resources by the filename embedded in the catalogue.
+    // Renaming every download to a UI title plus `.bin` makes the transferred
+    // resource impossible to find/switch on W9S.  Preserve the server filename
+    // while still removing path/control characters.
+    final sourceName = item.fileUrl.pathSegments.isEmpty
+        ? 'WATCH_DOWNLOAD'
+        : Uri.decodeComponent(item.fileUrl.pathSegments.last);
+    final safeName = sourceName.replaceAll(RegExp(r'[^A-Za-z0-9_.-]'), '_');
     final file = File(
-      path.join(
-        directory.path,
-        '${safeName.isEmpty ? 'watch_face' : safeName}.bin',
-      ),
+      path.join(directory.path, safeName.isEmpty ? 'WATCH_DOWNLOAD' : safeName),
     );
     final sink = file.openWrite();
     var received = 0;

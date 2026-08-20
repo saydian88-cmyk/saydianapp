@@ -12,6 +12,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../domain/feature_models.dart';
+import '../domain/health_interpretation.dart';
 import '../domain/models.dart';
 import '../services/app_controller.dart';
 import '../services/app_update_service.dart';
@@ -1358,9 +1359,11 @@ class HealthRecordDetailPage extends StatelessWidget {
                 children: [
                   for (var index = 0; index < values.length; index++) ...[
                     ListTile(
-                      title: Text(_recordValueLabel(values[index].key)),
+                      title: Text(
+                        healthValueLabel(values[index].key, record.metric),
+                      ),
                       trailing: Text(
-                        '${values[index].value} ${_recordValueUnit(values[index].key)}',
+                        '${_formatRecordNumber(values[index].value)} ${healthValueUnit(values[index].key, record)}',
                         style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
                     ),
@@ -1375,16 +1378,20 @@ class HealthRecordDetailPage extends StatelessWidget {
             const SizedBox(height: 12),
             _EcgWaveformCard(samples: record.samples),
           ],
-          if (record.metric == HealthMetric.ecg && values.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            const FeatureStateCard(
-              message: '心电结果说明',
-              detail:
-                  '平均心率反映测量期间的心跳频率；HRV 反映相邻心跳间期变化；QT 间期为心室电活动时间参考。结果仅用于日常趋势观察，不能替代心电图诊断。',
-              icon: Icons.monitor_heart_outlined,
-              color: SaydianColors.brandRed,
-            ),
-          ],
+          const SizedBox(height: 12),
+          Builder(
+            builder: (context) {
+              final interpretation = interpretHealthRecord(record);
+              return FeatureStateCard(
+                message: interpretation.title,
+                detail: interpretation.detail,
+                icon: record.metric == HealthMetric.ecg
+                    ? Icons.monitor_heart_outlined
+                    : Icons.insights_rounded,
+                color: SaydianColors.brandRed,
+              );
+            },
+          ),
           const SizedBox(height: 12),
           const FeatureStateCard(
             message: '查看长期趋势更有参考价值',
@@ -1397,20 +1404,13 @@ class HealthRecordDetailPage extends StatelessWidget {
     );
   }
 
-  String _recordValueLabel(String key) => switch (key) {
-    'systolic' => '收缩压',
-    'diastolic' => '舒张压',
-    'meanHeartRate' || 'averageHeartRate' => '平均心率',
-    'averageHRV' || 'hrv' => 'HRV',
-    'averageTimeInterval' || 'qt' => 'QT 间期',
-    _ => record.metric.label,
-  };
-
-  String _recordValueUnit(String key) => switch (key) {
-    'meanHeartRate' || 'averageHeartRate' => 'bpm',
-    'averageHRV' || 'hrv' || 'averageTimeInterval' || 'qt' => 'ms',
-    _ => record.unit,
-  };
+  String _formatRecordNumber(num value) =>
+      value is int || value == value.round()
+      ? value.toInt().toString()
+      : value
+            .toStringAsFixed(2)
+            .replaceFirst(RegExp(r'0+$'), '')
+            .replaceFirst(RegExp(r'\.$'), '');
 }
 
 class DeviceFeaturePage extends StatefulWidget {

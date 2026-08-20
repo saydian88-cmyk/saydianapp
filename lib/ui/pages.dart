@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../domain/feature_models.dart';
+import '../domain/health_interpretation.dart';
 import '../domain/models.dart';
 import '../services/app_controller.dart';
 import 'app_theme.dart';
@@ -1061,7 +1062,7 @@ class _MetricCard extends StatelessWidget {
     const iconColor = Color(0xFFE52E45);
     const chartColor = Color(0xFF4F89F7);
     final status = _homeMetricStatus(controller, record);
-    final needsAttention = status == '请关注';
+    final needsAttention = !{'正常', '已记录', '暂无数据'}.contains(status);
     final supportsManualMeasurement = const {
       HealthMetric.bloodPressure,
       HealthMetric.heartRate,
@@ -1191,6 +1192,34 @@ String _homeMetricStatus(AppController controller, HealthRecord? record) {
       quality.contains('abnormal')) {
     return '请关注';
   }
+  final primary = record.values['value'];
+  if (record.metric == HealthMetric.heartRate &&
+      primary != null &&
+      (primary < 60 || primary > 100)) {
+    return '超出参考范围';
+  }
+  if (record.metric == HealthMetric.bloodOxygen &&
+      primary != null &&
+      primary < 95) {
+    return '偏低';
+  }
+  if (record.metric == HealthMetric.bodyTemperature &&
+      primary != null &&
+      (primary < 36 || primary > 37.3)) {
+    return primary > 37.3 ? '偏高' : '偏低';
+  }
+  if (record.metric == HealthMetric.bloodPressure) {
+    final systolic = record.values['systolic'];
+    final diastolic = record.values['diastolic'];
+    if (systolic != null && diastolic != null) {
+      if (systolic >= 140 || diastolic >= 90) return '偏高';
+      if (systolic < 90 || diastolic < 60) return '偏低';
+    }
+  }
+  if (record.metric == HealthMetric.ecg) {
+    return (record.values['deviceAbnormalFlags'] ?? 0) > 0 ? '请关注' : '已记录';
+  }
+  if (record.metric == HealthMetric.hrv) return '已记录';
   final settings = controller.healthWarningSettings;
   if (record.metric == HealthMetric.heartRate && settings.heartRateEnabled) {
     final value = record.values['value'];
@@ -1563,6 +1592,42 @@ class _HealthMeasurementDialogState extends State<_HealthMeasurementDialog> {
                     height: 1.5,
                   ),
                 ),
+                if (isNew) ...[
+                  const SizedBox(height: 12),
+                  Builder(
+                    builder: (context) {
+                      final interpretation = interpretHealthRecord(record);
+                      return Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: SaydianColors.brandRedSoft,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              interpretation.title,
+                              style: const TextStyle(
+                                color: SaydianColors.brandRedDark,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              interpretation.detail,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                height: 1.45,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ],
                 if (!isNew &&
                     !failed &&
                     (widget.metric == HealthMetric.ecg ||
@@ -1575,6 +1640,8 @@ class _HealthMeasurementDialogState extends State<_HealthMeasurementDialog> {
                     child: CustomPaint(
                       painter: _LiveEcgPainter(
                         widget.controller.measurementSamples,
+                        sampleFrequency:
+                            widget.controller.measurementSampleFrequency,
                       ),
                     ),
                   ),
@@ -1629,11 +1696,19 @@ class _SportEntryPanel extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(14, 15, 14, 12),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFFD9F2FC), Color(0xFFF4F5F7)],
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
+          colors: [Color(0xFFFFF7F3), Color(0xFFFFFBED)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
         ),
+        border: Border.all(color: const Color(0x22D20B27)),
         borderRadius: BorderRadius.circular(22),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x10000000),
+            blurRadius: 18,
+            offset: Offset(0, 7),
+          ),
+        ],
       ),
       child: Column(
         children: [
@@ -1664,7 +1739,10 @@ class _SportEntryPanel extends StatelessWidget {
             },
           ),
           const SizedBox(height: 12),
-          Card(
+          Material(
+            color: const Color(0xFF741A2C),
+            borderRadius: BorderRadius.circular(17),
+            clipBehavior: Clip.antiAlias,
             child: ListTile(
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
@@ -1673,18 +1751,25 @@ class _SportEntryPanel extends StatelessWidget {
               ),
               leading: const _SettingsIcon(
                 icon: Icons.history_rounded,
-                color: SaydianColors.blue,
+                color: SaydianColors.brandGold,
               ),
               title: const Text(
                 '运动记录',
-                style: TextStyle(fontWeight: FontWeight.w800),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
               subtitle: Text(
                 controller.connectedDevice == null
                     ? '连接手表后读取运动记录'
                     : '已读取 ${controller.sportRecords.length} 条记录',
+                style: const TextStyle(color: Color(0xFFDDE0EA), fontSize: 13),
               ),
-              trailing: const Icon(Icons.chevron_right_rounded),
+              trailing: const Icon(
+                Icons.chevron_right_rounded,
+                color: Colors.white,
+              ),
             ),
           ),
         ],
@@ -1707,6 +1792,12 @@ class _SportEntry extends StatelessWidget {
       SportMode.cycling => Icons.directions_bike_rounded,
       SportMode.hiking => Icons.hiking_rounded,
     };
+    final colors = switch (mode) {
+      SportMode.running => const [Color(0xFFD20B27), Color(0xFF951126)],
+      SportMode.walking => const [Color(0xFFE48A22), Color(0xFFBA5E15)],
+      SportMode.cycling => const [Color(0xFF344B7D), Color(0xFF1C294A)],
+      SportMode.hiking => const [Color(0xFF3F795F), Color(0xFF285340)],
+    };
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
@@ -1715,11 +1806,22 @@ class _SportEntry extends StatelessWidget {
         child: Column(
           children: [
             Container(
-              width: 52,
-              height: 52,
-              decoration: const BoxDecoration(
-                color: Color(0xFF1D3B6F),
-                shape: BoxShape.circle,
+              width: 54,
+              height: 54,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: colors,
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(18),
+                boxShadow: [
+                  BoxShadow(
+                    color: colors.first.withValues(alpha: 0.24),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
               ),
               child: Icon(icon, color: Colors.white, size: 28),
             ),
@@ -2415,9 +2517,10 @@ class HealthHistoryPage extends StatelessWidget {
 }
 
 class _LiveEcgPainter extends CustomPainter {
-  const _LiveEcgPainter(this.samples);
+  const _LiveEcgPainter(this.samples, {required this.sampleFrequency});
 
   final List<num> samples;
+  final int sampleFrequency;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -2430,8 +2533,11 @@ class _LiveEcgPainter extends CustomPainter {
     for (var y = 0.0; y <= size.height; y += 18) {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
     }
-    final visible = samples.length > 180
-        ? samples.sublist(samples.length - 180)
+    // Show roughly six seconds, matching the slower sweep seen on the watch,
+    // rather than stretching less than one second across the entire chart.
+    final window = (sampleFrequency * 6).clamp(480, 3000);
+    final visible = samples.length > window
+        ? samples.sublist(samples.length - window)
         : samples;
     if (visible.length < 2) return;
     final minimum = visible.reduce(math.min).toDouble();
@@ -2439,7 +2545,7 @@ class _LiveEcgPainter extends CustomPainter {
     final span = math.max(maximum - minimum, 1);
     final path = Path();
     for (var index = 0; index < visible.length; index++) {
-      final x = index / (visible.length - 1) * size.width;
+      final x = index / math.max(window - 1, 1) * size.width;
       final normalized = (visible[index].toDouble() - minimum) / span;
       final y = size.height - normalized * (size.height - 10) - 5;
       if (index == 0) {
@@ -2460,7 +2566,8 @@ class _LiveEcgPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _LiveEcgPainter oldDelegate) =>
-      oldDelegate.samples != samples;
+      oldDelegate.samples != samples ||
+      oldDelegate.sampleFrequency != sampleFrequency;
 }
 
 class AiPage extends StatelessWidget {
@@ -3192,33 +3299,41 @@ class DevicePage extends StatelessWidget {
       children: [
         if (connected != null)
           Container(
-            padding: const EdgeInsets.all(18),
+            padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
-                colors: [Color(0xFFE9F9EF), Color(0xFFEAF6FF)],
+                colors: [Color(0xFFFFF6F3), Color(0xFFFFF9E9)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
-              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0x33D20B27)),
+              borderRadius: BorderRadius.circular(20),
             ),
             child: Column(
               children: [
                 Row(
                   children: [
                     Container(
-                      width: 76,
-                      height: 76,
+                      width: 56,
+                      height: 56,
                       decoration: BoxDecoration(
-                        color: SaydianColors.ink,
-                        borderRadius: BorderRadius.circular(24),
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Color(0x16000000),
+                            blurRadius: 12,
+                            offset: Offset(0, 4),
+                          ),
+                        ],
                       ),
                       child: const Icon(
                         Icons.watch_rounded,
-                        color: Colors.white,
-                        size: 44,
+                        color: SaydianColors.brandRed,
+                        size: 34,
                       ),
                     ),
-                    const SizedBox(width: 16),
+                    const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3229,7 +3344,7 @@ class DevicePage extends StatelessWidget {
                                 child: Text(
                                   connected.name,
                                   style: const TextStyle(
-                                    fontSize: 20,
+                                    fontSize: 18,
                                     fontWeight: FontWeight.w900,
                                   ),
                                 ),
@@ -3248,31 +3363,39 @@ class DevicePage extends StatelessWidget {
                               fontSize: 12,
                             ),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 5),
                           _ConnectionBadge(
                             label: _deviceStateLabel(controller.deviceState),
                           ),
-                          const SizedBox(height: 8),
-                          Text(
-                            '设备同步：${controller.syncStatus}',
-                            style: const TextStyle(
-                              color: SaydianColors.muted,
-                              fontSize: 12,
-                            ),
-                          ),
-                          Text(
-                            '云端同步：${controller.cloudSyncStatus}',
-                            style: const TextStyle(
-                              color: SaydianColors.muted,
-                              fontSize: 12,
-                            ),
+                          const SizedBox(height: 5),
+                          Wrap(
+                            spacing: 7,
+                            runSpacing: 1,
+                            children: [
+                              Text(
+                                '设备同步：${controller.syncStatus}',
+                                style: const TextStyle(
+                                  color: SaydianColors.muted,
+                                  fontSize: 11.5,
+                                  height: 1.3,
+                                ),
+                              ),
+                              Text(
+                                '云端同步：${controller.cloudSyncStatus}',
+                                style: const TextStyle(
+                                  color: SaydianColors.muted,
+                                  fontSize: 11.5,
+                                  height: 1.3,
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 12),
                 Row(
                   children: [
                     Expanded(
@@ -3293,12 +3416,20 @@ class DevicePage extends StatelessWidget {
                               ? '同步中 ${(controller.deviceSyncProgress * 100).round()}%'
                               : '同步数据',
                         ),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size.fromHeight(44),
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: OutlinedButton(
                         onPressed: controller.disconnectDevice,
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(44),
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                        ),
                         child: const Text('断开连接'),
                       ),
                     ),
@@ -4849,8 +4980,24 @@ class SettingsPage extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              gradient: saydianSoftGradient,
-              borderRadius: BorderRadius.circular(22),
+              gradient: const LinearGradient(
+                colors: [
+                  Color(0xFF11182D),
+                  Color(0xFF252E4C),
+                  Color(0xFF741A2C),
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              border: Border.all(color: const Color(0x55D8B848)),
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x240E1730),
+                  blurRadius: 24,
+                  offset: Offset(0, 10),
+                ),
+              ],
             ),
             child: Row(
               children: [
@@ -4858,7 +5005,11 @@ class SettingsPage extends StatelessWidget {
                   width: 66,
                   height: 66,
                   decoration: const BoxDecoration(
-                    color: SaydianColors.ink,
+                    gradient: LinearGradient(
+                      colors: [Color(0xFFE12B43), Color(0xFF9E1025)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(
@@ -4877,6 +5028,7 @@ class SettingsPage extends StatelessWidget {
                         style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w900,
+                          color: Colors.white,
                         ),
                       ),
                       const SizedBox(height: 5),
@@ -4885,14 +5037,14 @@ class SettingsPage extends StatelessWidget {
                             ? '健康档案仅保存在本机'
                             : 'ID：$memberId',
                         style: const TextStyle(
-                          color: SaydianColors.muted,
+                          color: Color(0xFFD9DDEC),
                           fontSize: 12,
                         ),
                       ),
                     ],
                   ),
                 ),
-                const Icon(Icons.chevron_right_rounded),
+                const Icon(Icons.chevron_right_rounded, color: Colors.white),
               ],
             ),
           ),
@@ -5248,7 +5400,20 @@ class _MyServiceEntry extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Column(
           children: [
-            Icon(icon, color: const Color(0xFF516392), size: 25),
+            Container(
+              width: 46,
+              height: 46,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFFFFF0EC), Color(0xFFFFF8DE)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(color: const Color(0x22D20B27)),
+              ),
+              child: Icon(icon, color: SaydianColors.brandRedDark, size: 24),
+            ),
             const SizedBox(height: 7),
             Text(
               label,

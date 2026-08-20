@@ -7,6 +7,11 @@ import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Matrix
+import android.graphics.Paint
 import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
@@ -32,9 +37,11 @@ import com.jieli.jl_fatfs.model.FatFile
 import com.jieli.jl_rcsp.interfaces.watch.OnWatchOpCallback
 import com.jieli.jl_rcsp.model.base.BaseError
 import com.veepoo.protocol.VPOperateManager
+import com.veepoo.protocol.customui.WatchUIType
 import com.veepoo.protocol.listener.IHealthRemindListener
 import com.veepoo.protocol.listener.IMiniCheckupOptListener
 import com.veepoo.protocol.listener.base.IABleConnectStatusListener
+import com.veepoo.protocol.listener.base.IBleNotifyResponse
 import com.veepoo.protocol.listener.base.IBleWriteResponse
 import com.veepoo.protocol.listener.base.IConnectResponse
 import com.veepoo.protocol.listener.base.INotifyResponse
@@ -115,6 +122,7 @@ import com.veepoo.protocol.model.datas.SportModelStateData
 import com.veepoo.protocol.model.datas.TemptureDetectData
 import com.veepoo.protocol.model.datas.TextAlarmData
 import com.veepoo.protocol.model.datas.TimeData
+import com.veepoo.protocol.model.datas.UIDataCustom
 import com.veepoo.protocol.model.datas.WorldClock
 import com.veepoo.protocol.model.datas.UICustomSetData
 import com.veepoo.protocol.model.datas.weather.WeatherData
@@ -134,6 +142,7 @@ import com.veepoo.protocol.model.enums.EDeviceStatus
 import com.veepoo.protocol.model.enums.EFunctionStatus
 import com.veepoo.protocol.model.enums.EHealthAlarmType
 import com.veepoo.protocol.model.enums.EHeartStatus
+import com.veepoo.protocol.model.enums.EUIFromType
 import com.veepoo.protocol.model.enums.EMiniCheckupTestErrorCode
 import com.veepoo.protocol.model.enums.EMultiAlarmOprate
 import com.veepoo.protocol.model.enums.EOprateStauts
@@ -144,7 +153,6 @@ import com.veepoo.protocol.model.enums.ESportType
 import com.veepoo.protocol.model.enums.EWeatherOprateStatus
 import com.veepoo.protocol.model.enums.EWeatherType
 import com.veepoo.protocol.model.enums.EWatchUIElementPosition
-import com.veepoo.protocol.model.enums.EWatchUIElementType
 import com.veepoo.protocol.model.enums.HealthRemindType
 import com.veepoo.protocol.model.enums.HrvDetectState
 import com.veepoo.protocol.model.settings.Alarm2Setting
@@ -488,6 +496,9 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     private var watchDataDays = 3
     private var capabilities = defaultCapabilities()
     private var activeMetric: String? = null
+    private var measurementResultTimeoutTask: Runnable? = null
+    private var ecgSampleFrequency = DEFAULT_ECG_SAMPLE_FREQUENCY
+    private var activeHrvUsesEcg = false
     private var temperatureRetryUsed = false
     private var bloodPressureStartGeneration = 0
     private var pendingBloodPressureStart: ResultCallback<Unit>? = null
@@ -521,6 +532,13 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         manager = VPOperateManager.getInstance()
         manager.setAutoConnectBTBySdk(false)
         manager.setCameraListener(cameraListener)
+        manager.listenDeviceCallbackData(
+            object : IBleNotifyResponse() {
+                override fun onNotify(service: UUID, characteristic: UUID, value: ByteArray) {
+                    onRawDeviceCallback(value)
+                }
+            },
+        )
     }
 
     fun setEventListener(listener: ((Map<String, Any?>) -> Unit)?) {
@@ -1043,7 +1061,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         if (!finishConnectionAttempt(generation, callback)) return
         connectingDeviceId = ""
         connectedDeviceId = ""
-        activeMetric = null
+        clearMeasurementSessionState()
         releaseJLWatchFaceSession()
         unregisterConnectStatusListener()
         runCatching { manager.disconnectWatch { } }
@@ -1095,7 +1113,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             connectionHandler.post {
                 if (code == Code.REQUEST_SUCCESS) {
                     connectedDeviceId = ""
-                    activeMetric = null
+                    clearMeasurementSessionState()
                     emit("disconnected", emptyMap())
                     callback.success(Unit)
                 } else {
@@ -1125,7 +1143,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         connectingDeviceId = ""
         connectedDeviceId = ""
         connectedDeviceName = ""
-        activeMetric = null
+        clearMeasurementSessionState()
         firmwareVersion = ""
         releaseJLWatchFaceSession()
         unregisterConnectStatusListener()
@@ -1669,6 +1687,86 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         }
     }
 
+    /**
+     * The JL watch-face APIs are a second protocol layered on the same BLE
+     * connection.  A normal Veepoo connection is not enough: notification,
+     * MTU negotiation and RCSP authentication must finish before any transfer.
+     * The mini-program performs these three steps before every dial operation.
+     */
+    private fun prepareJLWatchFaceSession(
+        onReady: () -> Unit,
+        onError: (String, String) -> Unit,
+    ) {
+        val completed = AtomicBoolean(false)
+        val timeout =
+            Runnable {
+                if (completed.compareAndSet(false, true)) {
+                    onError("JL_SESSION_TIMEOUT", "表盘连接超时，请保持手表亮屏并靠近手机后重试")
+                }
+            }
+        fun fail(code: String, message: String) {
+            if (!completed.compareAndSet(false, true)) return
+            connectionHandler.removeCallbacks(timeout)
+            onError(code, message)
+        }
+        fun ready() {
+            if (!completed.compareAndSet(false, true)) return
+            connectionHandler.removeCallbacks(timeout)
+            jlWatchFaceSessionActive = true
+            onReady()
+        }
+        lateinit var authenticate: () -> Unit
+        authenticate = {
+            if (RcspAuthManager.getInstance().isAuthPass) {
+                ready()
+            } else {
+                manager.startJLDeviceAuth(
+                    object : RcspAuthResponse {
+                        override fun onRcspAuthStart() = Unit
+
+                        override fun onRcspAuthSuccess() {
+                            connectionHandler.post { ready() }
+                        }
+
+                        override fun onRcspAuthFailed() {
+                            connectionHandler.post {
+                                fail("JL_AUTH_FAILED", "手表未完成表盘认证，请保持手表亮屏后重试")
+                            }
+                        }
+                    },
+                )
+            }
+        }
+        connectionHandler.postDelayed(timeout, JL_SESSION_PREPARE_TIMEOUT_MS)
+        if (manager.isJLNotifyOpened) {
+            authenticate()
+            return
+        }
+        manager.openJLDataNotify(
+            object : BleNotifyResponse {
+                override fun onNotify(service: UUID, characteristic: UUID, value: ByteArray) = Unit
+
+                override fun onResponse(code: Int) {
+                    connectionHandler.post {
+                        if (code != Code.REQUEST_SUCCESS) {
+                            fail("JL_NOTIFY_FAILED", "手表未完成表盘连接，请稍后重试")
+                            return@post
+                        }
+                        val mtuCompleted = AtomicBoolean(false)
+                        val continueAfterMtu = {
+                            if (mtuCompleted.compareAndSet(false, true)) authenticate()
+                        }
+                        manager.changeMTU(
+                            JL_REQUESTED_MTU,
+                            IMtuChangeListener { connectionHandler.post(continueAfterMtu) },
+                        )
+                        connectionHandler.postDelayed(continueAfterMtu, JL_MTU_CALLBACK_GRACE_MS)
+                    }
+                }
+            },
+        )
+    }
+
     private fun uploadNetworkWatchFace(
         feature: String,
         values: Map<*, *>?,
@@ -1694,32 +1792,37 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             else callback.error("TRANSFER_FAILED", message ?: "表盘设置失败，请稍后重试")
         }
         connectionHandler.postDelayed(timeout, WATCH_FACE_UPLOAD_TIMEOUT_MS)
-        JLWatchHolder.getInstance().updateJLWatchServerDial(
-            file.absolutePath,
-            object : JLWatchHolder.OnSetJLWatchDialListener {
-                override fun onStart() {
-                    emit("deviceFeatureProgress", mapOf("feature" to feature, "progress" to 0))
-                }
+        prepareJLWatchFaceSession(
+            onReady = {
+                JLWatchHolder.getInstance().updateJLWatchServerDial(
+                    file.absolutePath,
+                    object : JLWatchHolder.OnSetJLWatchDialListener {
+                        override fun onStart() {
+                            emit("deviceFeatureProgress", mapOf("feature" to feature, "progress" to 0))
+                        }
 
-                override fun onProgress(progress: Int) {
-                    emit(
-                        "deviceFeatureProgress",
-                        mapOf("feature" to feature, "progress" to progress.coerceIn(0, 100)),
-                    )
-                }
+                        override fun onProgress(progress: Int) {
+                            emit(
+                                "deviceFeatureProgress",
+                                mapOf("feature" to feature, "progress" to progress.coerceIn(0, 100)),
+                            )
+                        }
 
-                override fun onComplete(path: String?) {
-                    emit("deviceFeatureProgress", mapOf("feature" to feature, "progress" to 100))
-                    connectionHandler.post { finish(true) }
-                }
+                        override fun onComplete(path: String?) {
+                            emit("deviceFeatureProgress", mapOf("feature" to feature, "progress" to 100))
+                            connectionHandler.post { finish(true) }
+                        }
 
-                override fun onFiled(code: Int, message: String?) {
-                    Log.w(LOG_TAG, "Network watch face failed: code=$code message=$message")
-                    connectionHandler.post {
-                        finish(false, "表盘设置失败，请保持手表靠近手机后重试")
-                    }
-                }
+                        override fun onFiled(code: Int, message: String?) {
+                            Log.w(LOG_TAG, "Network watch face failed: code=$code message=$message")
+                            connectionHandler.post {
+                                finish(false, "表盘设置失败，请保持手表靠近手机后重试")
+                            }
+                        }
+                    },
+                )
             },
+            onError = { _, message -> finish(false, message) },
         )
     }
 
@@ -1799,41 +1902,150 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             callback.error("INVALID_ARGUMENT", "请选择一张有效照片")
             return
         }
-        manager.setJLWatchPhotoDial(
-            path,
-            object : JLWatchFaceManager.JLTransferPicDialListener {
-                override fun onLowPower() {
-                    callback.error("LOW_POWER", "手表电量较低，请充电后再设置表盘")
+        prepareJLWatchFaceSession(
+            onReady = {
+                preparePhotoWatchFaceImage(
+                    sourcePath = path,
+                    onReady = { preparedPath ->
+                        manager.setJLWatchPhotoDial(
+                            preparedPath,
+                            object : JLWatchFaceManager.JLTransferPicDialListener {
+                        override fun onLowPower() {
+                            callback.error("LOW_POWER", "手表电量较低，请充电后再设置表盘")
+                        }
+
+                        override fun onJLTransferPicDialStart() {
+                            emit("deviceFeatureProgress", mapOf("feature" to feature, "progress" to 0))
+                        }
+
+                        override fun onTransferPicDialProgress(progress: Int) {
+                            emit(
+                                "deviceFeatureProgress",
+                                mapOf("feature" to feature, "progress" to progress.coerceIn(0, 100)),
+                            )
+                        }
+
+                        override fun onScaleBGPFileTransferComplete() = Unit
+
+                        override fun onAIPreviewTransferComplete() = Unit
+
+                        override fun onBigBGPFileTransferComplete() = Unit
+
+                        override fun onTransferComplete() {
+                            emit("deviceFeatureProgress", mapOf("feature" to feature, "progress" to 100))
+                            applyPhotoWatchFaceLayout(values, callback)
+                        }
+
+                        override fun onTransferError(code: Int, errorMsg: String) {
+                            Log.w(LOG_TAG, "Photo watch face failed: code=$code message=$errorMsg")
+                            callback.error("TRANSFER_FAILED", "照片表盘设置失败，请保持手表靠近手机后重试")
+                        }
+                            },
+                        )
+                    },
+                    onError = { code, message -> callback.error(code, message) },
+                )
+            },
+            onError = { code, message -> callback.error(code, message) },
+        )
+    }
+
+    private fun preparePhotoWatchFaceImage(
+        sourcePath: String,
+        onReady: (String) -> Unit,
+        onError: (String, String) -> Unit,
+    ) {
+        val completed = AtomicBoolean(false)
+        val timeout =
+            Runnable {
+                if (completed.compareAndSet(false, true)) {
+                    onError("PHOTO_SIZE_TIMEOUT", "手表表盘尺寸读取超时，请保持连接后重试")
                 }
-
-                override fun onJLTransferPicDialStart() {
-                    emit("deviceFeatureProgress", mapOf("feature" to feature, "progress" to 0))
+            }
+        fun fail(code: String, message: String) {
+            if (!completed.compareAndSet(false, true)) return
+            connectionHandler.removeCallbacks(timeout)
+            onError(code, message)
+        }
+        connectionHandler.postDelayed(timeout, PHOTO_LAYOUT_TIMEOUT_MS)
+        manager.readWatchUiInfo(
+            IBleWriteResponse { code ->
+                if (code != Code.REQUEST_SUCCESS) {
+                    connectionHandler.post {
+                        fail("PHOTO_SIZE_READ_FAILED", "无法读取手表表盘尺寸，请重新连接后重试")
+                    }
                 }
-
-                override fun onTransferPicDialProgress(progress: Int) {
-                    emit(
-                        "deviceFeatureProgress",
-                        mapOf("feature" to feature, "progress" to progress.coerceIn(0, 100)),
-                    )
-                }
-
-                override fun onScaleBGPFileTransferComplete() = Unit
-
-                override fun onAIPreviewTransferComplete() = Unit
-
-                override fun onBigBGPFileTransferComplete() = Unit
-
-                override fun onTransferComplete() {
-                    emit("deviceFeatureProgress", mapOf("feature" to feature, "progress" to 100))
-                    applyPhotoWatchFaceLayout(values, callback)
-                }
-
-                override fun onTransferError(code: Int, errorMsg: String) {
-                    Log.w(LOG_TAG, "Photo watch face failed: code=$code message=$errorMsg")
-                    callback.error("TRANSFER_FAILED", "照片表盘设置失败，请保持手表靠近手机后重试")
+            },
+            EUIFromType.CUSTOM,
+            object : IUIBaseInfoListener<UIDataCustom> {
+                override fun onBaseUiInfo(data: UIDataCustom) {
+                    if (!completed.compareAndSet(false, true)) return
+                    connectionHandler.removeCallbacks(timeout)
+                    val watchUiType = WatchUIType.getInstance(data.customUIType)
+                    val targetWidth = watchUiType.bigBitmapWidth
+                    val targetHeight = watchUiType.bigBitmapHeight
+                    if (targetWidth <= 0 || targetHeight <= 0) {
+                        onError("PHOTO_SIZE_INVALID", "手表返回的表盘尺寸无效，请重新连接后重试")
+                        return
+                    }
+                    Thread {
+                        runCatching {
+                            cropPhotoForWatchFace(sourcePath, targetWidth, targetHeight)
+                        }.onSuccess { preparedPath ->
+                            connectionHandler.post { onReady(preparedPath) }
+                        }.onFailure { error ->
+                            Log.w(LOG_TAG, "Photo watch face crop failed", error)
+                            connectionHandler.post {
+                                onError("PHOTO_CROP_FAILED", "照片处理失败，请重新选择后重试")
+                            }
+                        }
+                    }.start()
                 }
             },
         )
+    }
+
+    private fun cropPhotoForWatchFace(
+        sourcePath: String,
+        targetWidth: Int,
+        targetHeight: Int,
+    ): String {
+        val source = BitmapFactory.decodeFile(sourcePath) ?: error("Unable to decode source image")
+        val output = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+        try {
+            val scale =
+                maxOf(
+                    targetWidth.toFloat() / source.width.toFloat(),
+                    targetHeight.toFloat() / source.height.toFloat(),
+                )
+            val matrix = Matrix()
+            matrix.setScale(scale, scale)
+            matrix.postTranslate(
+                (targetWidth - source.width * scale) / 2f,
+                (targetHeight - source.height * scale) / 2f,
+            )
+            Canvas(output).drawBitmap(
+                source,
+                matrix,
+                Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG),
+            )
+            val prepared =
+                java.io.File(
+                    appContext.cacheDir,
+                    "photo_watch_face_${targetWidth}x${targetHeight}.png",
+                )
+            java.io.FileOutputStream(prepared).use { stream ->
+                check(output.compress(Bitmap.CompressFormat.PNG, 100, stream))
+            }
+            Log.i(
+                LOG_TAG,
+                "Photo watch face prepared source=${source.width}x${source.height} target=${targetWidth}x$targetHeight path=${prepared.absolutePath}",
+            )
+            return prepared.absolutePath
+        } finally {
+            source.recycle()
+            output.recycle()
+        }
     }
 
     private fun readHealthAssessment(callback: ResultCallback<Any?>) {
@@ -3990,6 +4202,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             return
         }
         activeMetric = metric
+        armMeasurementResultTimeout(metric)
         Log.i(LOG_TAG, "measurement start metric=$metric device=$connectedDeviceId")
         emit("state", mapOf("value" to "measuring", "metric" to metric))
         try {
@@ -4007,15 +4220,33 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                     manager.startDetectBloodComponent(measurementWrite(callback), false, bloodComponentListener)
                 "ecg" -> {
                     activeEcgSamples.clear()
+                    ecgSampleFrequency = DEFAULT_ECG_SAMPLE_FREQUENCY
                     manager.startDetectECG(measurementWrite(callback), true, ecgListener)
                 }
-                "hrv" -> manager.startDetectHrv(measurementWrite(callback), hrvListener)
+                "hrv" -> {
+                    if (VpSpGetUtil.getVpSpVariInstance(appContext).isSupportHrvAppDetect) {
+                        activeHrvUsesEcg = false
+                        manager.startDetectHrv(measurementWrite(callback), hrvListener)
+                    } else if (VpSpGetUtil.getVpSpVariInstance(appContext).isSupportECG) {
+                        // Some W9S firmware exposes HRV only as part of the ECG
+                        // result.  Use the vendor ECG result instead of failing
+                        // an otherwise measurable HRV entry.
+                        activeEcgSamples.clear()
+                        ecgSampleFrequency = DEFAULT_ECG_SAMPLE_FREQUENCY
+                        activeHrvUsesEcg = true
+                        manager.startDetectECG(measurementWrite(callback), true, ecgListener)
+                    } else {
+                        throw IllegalStateException("HRV app measurement is not supported")
+                    }
+                }
                 else -> {
                     synchronized(this) { activeMetric = null }
                     callback.error("MEASUREMENT_NOT_AVAILABLE", "该指标仅支持同步手表历史数据")
                 }
             }
         } catch (error: Throwable) {
+            measurementResultTimeoutTask?.let(connectionHandler::removeCallbacks)
+            measurementResultTimeoutTask = null
             synchronized(this) {
                 if (activeMetric == metric) activeMetric = null
             }
@@ -4028,6 +4259,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     }
 
     fun stopMeasurement(metric: String, callback: ResultCallback<Unit>) {
+        measurementResultTimeoutTask?.let(connectionHandler::removeCallbacks)
+        measurementResultTimeoutTask = null
         val response = measurementStopWrite(callback, metric)
         when (metric) {
             "heart_rate" -> manager.stopDetectHeart(response)
@@ -4055,7 +4288,11 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             "body_composition" -> manager.stopDetectBodyComponent(response)
             "blood_composition" -> manager.stopDetectBloodComponent(response)
             "ecg" -> manager.stopDetectECG(response, true, ecgListener)
-            "hrv" -> manager.stopDetectHrv(response, hrvListener)
+            "hrv" -> {
+                if (activeHrvUsesEcg) manager.stopDetectECG(response, true, ecgListener)
+                else manager.stopDetectHrv(response, hrvListener)
+                activeHrvUsesEcg = false
+            }
             else -> callback.error("MEASUREMENT_NOT_AVAILABLE", "该指标没有可停止的实时测量")
         }
         activeMetric = null
@@ -4066,10 +4303,31 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         pendingBloodPressureStart = callback
         Log.i(
             LOG_TAG,
-            "blood pressure protocol=classic_public (official manual BP flow)",
+            "blood pressure protocol=read_device_mode_then_start",
         )
-        beginBloodPressureMeasurement(generation, EBPDetectModel.DETECT_MODEL_PUBLIC)
+        readBloodPressureMode(generation)
     }
+
+    private fun armMeasurementResultTimeout(metric: String) {
+        measurementResultTimeoutTask?.let(connectionHandler::removeCallbacks)
+        val timeout =
+            Runnable {
+                failMeasurement(
+                    metric,
+                    "${metric.uppercase()}_RESULT_TIMEOUT",
+                    "${measurementMetricLabel(metric)}长时间没有返回结果，请确认手表已正确佩戴并退出其他测量后重试",
+                )
+            }
+        measurementResultTimeoutTask = timeout
+        connectionHandler.postDelayed(timeout, measurementResultTimeoutFor(metric))
+    }
+
+    private fun measurementResultTimeoutFor(metric: String): Long =
+        when (metric) {
+            "ecg", "hrv", "body_composition", "blood_composition" -> 120_000L
+            "blood_pressure" -> 100_000L
+            else -> 75_000L
+        }
 
     private fun applyPhotoWatchFaceLayout(
         values: Map<*, *>?,
@@ -4078,25 +4336,48 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         val positions = EWatchUIElementPosition.values()
         val index = (values?.get("timePosition") as? Number)?.toInt()?.coerceIn(0, positions.lastIndex) ?: 0
         val completed = AtomicBoolean(false)
+        val timeout =
+            Runnable {
+                if (completed.compareAndSet(false, true)) {
+                    callback.error("PHOTO_LAYOUT_TIMEOUT", "照片已传输，但表盘样式读取超时，请重试")
+                }
+            }
         fun finish(success: Boolean) {
             if (!completed.compareAndSet(false, true)) return
+            connectionHandler.removeCallbacks(timeout)
             if (success) callback.success(Unit)
             else callback.error("PHOTO_LAYOUT_FAILED", "照片已传输，但时间位置保存失败，请重试")
         }
-        manager.setCustomWacthUi(
+        connectionHandler.postDelayed(timeout, PHOTO_LAYOUT_TIMEOUT_MS)
+        manager.readWatchUiInfo(
             IBleWriteResponse { code ->
                 if (code != Code.REQUEST_SUCCESS) finish(false)
             },
-            UICustomSetData(
-                false,
-                positions[index],
-                EWatchUIElementType.DATE_STYLE_1,
-                EWatchUIElementType.HEART,
-                0xFFFFFF,
-            ),
-            object : IUIBaseInfoListener<UICustomSetData> {
-                override fun onBaseUiInfo(data: UICustomSetData) {
-                    finish(true)
+            EUIFromType.CUSTOM,
+            object : IUIBaseInfoListener<UIDataCustom> {
+                override fun onBaseUiInfo(data: UIDataCustom) {
+                    connectionHandler.postDelayed(
+                        {
+                            manager.setCustomWacthUi(
+                                IBleWriteResponse { code ->
+                                    if (code != Code.REQUEST_SUCCESS) finish(false)
+                                },
+                                UICustomSetData(
+                                    false,
+                                    positions[index],
+                                    data.upTimeType,
+                                    data.downTimeType,
+                                    data.color888,
+                                ),
+                                object : IUIBaseInfoListener<UIDataCustom> {
+                                    override fun onBaseUiInfo(updated: UIDataCustom) {
+                                        finish(updated.timePosition == positions[index])
+                                    }
+                                },
+                            )
+                        },
+                        PHOTO_LAYOUT_SETTLE_MS,
+                    )
                 }
             },
         )
@@ -4278,6 +4559,14 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         bloodPressureModeTimeoutTask = null
     }
 
+    private fun clearMeasurementSessionState() {
+        measurementResultTimeoutTask?.let(connectionHandler::removeCallbacks)
+        measurementResultTimeoutTask = null
+        cancelPendingBloodPressureStart()
+        activeMetric = null
+        activeHrvUsesEcg = false
+    }
+
     private fun failPendingBloodPressureStart(
         generation: Int,
         code: String,
@@ -4423,12 +4712,12 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         )
         if (data.status == EBPDetectStatus.STATE_BP_NORMAL &&
             data.progress >= 100 &&
-            data.highPressure in 60..300 &&
-            data.lowPressure in 20..200 &&
-            data.highPressure > data.lowPressure &&
-            claimMeasurementResult("blood_pressure")
+            acceptBloodPressureResult(
+                highPressure = data.highPressure,
+                lowPressure = data.lowPressure,
+                source = "sdk_listener",
+            )
         ) {
-            emitRecord(record("blood_pressure", mapOf("systolic" to data.highPressure, "diastolic" to data.lowPressure), "mmHg", Date()))
             return
         }
         if (data.status != EBPDetectStatus.STATE_BP_NORMAL) {
@@ -4443,6 +4732,56 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         } else if (data.progress >= 100) {
             failMeasurement("blood_pressure", "BLOOD_PRESSURE_INVALID", "本次血压结果无效，请保持静止后重试")
         }
+    }
+
+    private fun onRawDeviceCallback(value: ByteArray) {
+        // HBand 2.3.77.15 occasionally receives W9S BP notifications without
+        // forwarding them to IBPDetectDataListener. The public raw-notify hook
+        // runs before the SDK dispatcher, so accept only the documented final
+        // BP packet and let claimMeasurementResult prevent duplicate records
+        // when the standard listener is also delivered.
+        if (value.size < 6 || (value[0].toInt() and 0xFF) != 0x90) return
+        val highPressure = value[1].toInt() and 0xFF
+        val lowPressure = value[2].toInt() and 0xFF
+        val progress = value[3].toInt() and 0xFF
+        val status = value[4].toInt() and 0xFF
+        val hasProgress = (value[5].toInt() and 0xFF) == 1
+        if (!hasProgress || progress < 100 || status != 0) return
+        connectionHandler.post {
+            acceptBloodPressureResult(
+                highPressure = highPressure,
+                lowPressure = lowPressure,
+                source = "raw_notify_fallback",
+            )
+        }
+    }
+
+    private fun acceptBloodPressureResult(
+        highPressure: Int,
+        lowPressure: Int,
+        source: String,
+    ): Boolean {
+        if (highPressure !in 60..300 ||
+            lowPressure !in 20..200 ||
+            highPressure <= lowPressure ||
+            !claimMeasurementResult("blood_pressure")
+        ) {
+            return false
+        }
+        Log.i(
+            LOG_TAG,
+            "measurement result accepted metric=blood_pressure source=$source " +
+                "high=$highPressure low=$lowPressure",
+        )
+        emitRecord(
+            record(
+                "blood_pressure",
+                mapOf("systolic" to highPressure, "diastolic" to lowPressure),
+                "mmHg",
+                Date(),
+            ),
+        )
+        return true
     }
 
     private fun onOxygenData(data: Spo2hData) {
@@ -4474,15 +4813,19 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         Log.d(
             LOG_TAG,
             "measurement callback metric=body_temperature operation=${data.oprate} state=${data.deviceState} " +
-                "progress=${data.progress} value=${data.tempture} active=$activeMetric",
+                "progress=${data.progress} value=${data.tempture} skin=${data.temptureBase} active=$activeMetric",
         )
         if (data.oprate == 1 &&
             data.deviceState in setOf(0, 7) &&
-            (data.progress >= 100 || data.deviceState == 7) &&
+            data.progress >= 100 &&
             data.tempture in 20.0f..45.0f &&
             claimMeasurementResult("body_temperature")
         ) {
-            emitRecord(record("body_temperature", mapOf("value" to data.tempture), "℃", Date()))
+            val values = buildMap<String, Number> {
+                put("value", data.tempture)
+                if (data.temptureBase in 15.0f..45.0f) put("skinTemperature", data.temptureBase)
+            }
+            emitRecord(record("body_temperature", values, "℃", Date()))
             return
         }
         when {
@@ -4640,6 +4983,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     private val ecgListener =
         object : IECGDetectListener {
             override fun onEcgDetectInfoChange(info: EcgDetectInfo) {
+                ecgSampleFrequency = info.frequency.takeIf { it in 50..1000 } ?: DEFAULT_ECG_SAMPLE_FREQUENCY
                 emit(
                     "measurementProgress",
                     mapOf(
@@ -4685,6 +5029,10 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                     if (result.aveHeart > 0) put("meanHeartRate", result.aveHeart)
                     if (result.aveHrv > 0) put("averageHRV", result.aveHrv)
                     if (result.aveQT > 0) put("averageTimeInterval", result.aveQT)
+                    if (result.aveResRate > 0) put("respiratoryRate", result.aveResRate)
+                    put("sampleFrequency", result.frequency.takeIf { it > 0 } ?: ecgSampleFrequency)
+                    val abnormalCount = result.diseaseResult?.count { it != 0 } ?: 0
+                    if (abnormalCount > 0) put("deviceAbnormalFlags", abnormalCount)
                 }
                 val metric = activeMetric ?: "ecg"
                 val resultValues =
@@ -4725,6 +5073,11 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                     if (diagnosis.heartRate > 0) put("meanHeartRate", diagnosis.heartRate)
                     if (diagnosis.hrv > 0) put("averageHRV", diagnosis.hrv)
                     if (diagnosis.qtTime > 0) put("averageTimeInterval", diagnosis.qtTime)
+                    if (diagnosis.respRate > 0) put("respiratoryRate", diagnosis.respRate)
+                    if (diagnosis.diseaseRisk > 0) put("diseaseRisk", diagnosis.diseaseRisk)
+                    if (diagnosis.pressureIndex > 0) put("pressureIndex", diagnosis.pressureIndex)
+                    if (diagnosis.fatigueIndex > 0) put("fatigueIndex", diagnosis.fatigueIndex)
+                    put("sampleFrequency", diagnosis.frequency.takeIf { it > 0 } ?: ecgSampleFrequency)
                 }
                 val metric = activeMetric ?: "ecg"
                 val resultValues =
@@ -4800,6 +5153,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 false
             } else {
                 activeMetric = null
+                measurementResultTimeoutTask?.let(connectionHandler::removeCallbacks)
+                measurementResultTimeoutTask = null
                 Log.i(LOG_TAG, "measurement result accepted metric=$metric")
                 true
             }
@@ -4820,10 +5175,15 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         connectionHandler.postDelayed(
             {
                 if (activeMetric == metric) {
+                    val hrv = metric == "hrv"
                     failMeasurement(
                         metric,
-                        "ECG_MEASUREMENT_FAILED",
-                        "心电测量未完成，请保持接触电极后重试",
+                        if (hrv) "HRV_MEASUREMENT_FAILED" else "ECG_MEASUREMENT_FAILED",
+                        if (hrv) {
+                            "HRV 测量未完成，请保持手表贴合并持续接触电极后重试"
+                        } else {
+                            "心电测量未完成，请保持接触电极后重试"
+                        },
                     )
                 }
             },
@@ -4850,7 +5210,11 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 "body_composition" -> manager.stopDetectBodyComponent(ignored)
                 "blood_composition" -> manager.stopDetectBloodComponent(ignored)
                 "ecg" -> manager.stopDetectECG(ignored, true, ecgListener)
-                "hrv" -> manager.stopDetectHrv(ignored, hrvListener)
+                "hrv" -> {
+                    if (activeHrvUsesEcg) manager.stopDetectECG(ignored, true, ecgListener)
+                    else manager.stopDetectHrv(ignored, hrvListener)
+                    activeHrvUsesEcg = false
+                }
             }
         }.onFailure { error ->
             Log.w(LOG_TAG, "Failed to stop $metric after terminal measurement error", error)
@@ -4859,22 +5223,32 @@ private class VeepooWearableAdapter(context: android.content.Context) {
 
     private fun bodyComponentValues(data: BodyComponent): Map<String, Number> =
         buildMap {
-            if (data.BMI > 0) put("BMI", data.BMI)
-            if (data.bodyFatRate > 0) put("bodyFatPercentage", data.bodyFatRate)
-            if (data.fatRate > 0) put("fatMass", data.fatRate)
-            if (data.muscleMass > 0) put("muscleMass", data.muscleMass)
-            if (data.bodyWater > 0) put("bodyMoisture", data.bodyWater)
-            if (data.boneMass > 0) put("boneMass", data.boneMass)
-            if (data.basalMetabolicRate > 0) put("basalMetabolism", data.basalMetabolicRate)
+            fun putRange(key: String, value: Float, min: Float, max: Float) {
+                if (value.isFinite() && value in min..max) put(key, value)
+            }
+            putRange("bmi", data.BMI, 5f, 80f)
+            putRange("bodyFatRate", data.bodyFatRate, 2f, 48f)
+            putRange("fatMass", data.fatRate, 1f, 248f)
+            putRange("fatFreeMass", data.FFM, 1f, 248f)
+            putRange("muscleRate", data.muscleRate, 1f, 100f)
+            putRange("muscleMass", data.muscleMass, 1f, 248f)
+            putRange("subcutaneousFat", data.subcutaneousFat, 1f, 100f)
+            putRange("bodyWaterRate", data.bodyWater, 10f, 90f)
+            putRange("waterMass", data.waterContent, 1f, 248f)
+            putRange("skeletalMuscleRate", data.skeletalMuscleRate, 1f, 100f)
+            putRange("boneMass", data.boneMass, 0.5f, 10f)
+            putRange("proteinRate", data.proteinProportion, 1f, 50f)
+            putRange("proteinMass", data.proteinMass, 0.5f, 100f)
+            putRange("basalMetabolicRate", data.basalMetabolicRate, 25f, 14_995f)
         }
 
     private fun bloodComponentValues(data: BloodComponent): Map<String, Number> =
         buildMap {
-            if (data.uricAcid > 0) put("uricAcid", data.uricAcid)
-            if (data.tCHO > 0) put("totalCholesterol", data.tCHO)
-            if (data.tAG > 0) put("triglycerides", data.tAG)
-            if (data.hDL > 0) put("highDensityLipoprotein", data.hDL)
-            if (data.lDL > 0) put("lowDensityLipoprotein", data.lDL)
+            if (data.uricAcid in 90f..1000f) put("uricAcid", data.uricAcid)
+            if (data.tCHO in 0.01f..100f) put("totalCholesterol", data.tCHO)
+            if (data.tAG in 0.01f..100f) put("triglycerides", data.tAG)
+            if (data.hDL in 0.01f..100f) put("highDensityLipoprotein", data.hDL)
+            if (data.lDL in 0.01f..100f) put("lowDensityLipoprotein", data.lDL)
         }
 
     private fun measurementWrite(callback: ResultCallback<Unit>): IBleWriteResponse {
@@ -5063,7 +5437,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                             )
                             connectingDeviceId = ""
                             connectedDeviceId = ""
-                            activeMetric = null
+                            clearMeasurementSessionState()
                             releaseJLWatchFaceSession()
                             emit("disconnected", mapOf("deviceId" to mac))
                         }
@@ -5106,6 +5480,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         unregisterConnectStatusListener()
         connectingDeviceId = ""
         connectedDeviceId = ""
+        clearMeasurementSessionState()
         releaseJLWatchFaceSession()
         manager.disconnectWatch { }
         eventListener = null
@@ -5202,9 +5577,13 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         private const val WATCH_FACE_CURRENT_READ_TIMEOUT_MS = 8_000L
         private const val JL_REQUESTED_MTU = 247
         private const val JL_MTU_CALLBACK_GRACE_MS = 1_500L
+        private const val JL_SESSION_PREPARE_TIMEOUT_MS = 20_000L
         private const val WATCH_FACE_SWITCH_TIMEOUT_MS = 20_000L
         private const val WATCH_FACE_UPLOAD_TIMEOUT_MS = 150_000L
         private const val WATCH_FACE_VERIFY_DELAY_MS = 1_200L
+        private const val PHOTO_LAYOUT_SETTLE_MS = 180L
+        private const val PHOTO_LAYOUT_TIMEOUT_MS = 15_000L
+        private const val DEFAULT_ECG_SAMPLE_FREQUENCY = 250
         private const val STALE_DISCONNECT_CHECKS = 20
         private const val STALE_DISCONNECT_POLL_MS = 150L
         private const val NOTIFICATION_PREFS = "saidian_notification_settings"

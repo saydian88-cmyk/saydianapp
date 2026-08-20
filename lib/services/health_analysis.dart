@@ -161,17 +161,30 @@ class HealthAnalysisService {
     List<HealthRecord> records,
   ) {
     final present = records.expand((record) => record.values.keys).toSet();
-    final preferred = switch (metric) {
-      HealthMetric.bodyComposition => const [
-        'BMI',
+    if (metric == HealthMetric.bodyComposition) {
+      const preferred = [
         'bmi',
-        'bodyFatPercentage',
+        'bodyFatRate',
         'fatMass',
+        'fatFreeMass',
+        'muscleRate',
         'muscleMass',
-        'bodyMoisture',
+        'subcutaneousFat',
+        'bodyWaterRate',
+        'waterMass',
+        'skeletalMuscleRate',
         'boneMass',
-        'basalMetabolism',
-      ],
+        'proteinRate',
+        'proteinMass',
+        'basalMetabolicRate',
+      ];
+      final result = preferred.where((key) {
+        return _aliasesFor(key).any(present.contains);
+      }).toList();
+      if (result.isNotEmpty) return result;
+      return present.where((key) => key != 'diastolic').toList()..sort();
+    }
+    final preferred = switch (metric) {
       HealthMetric.bloodComposition => const [
         'uricAcid',
         'totalCholesterol',
@@ -196,7 +209,6 @@ class HealthAnalysisService {
       'value',
       'meanHeartRate',
       'averageHeartRate',
-      'BMI',
       'bmi',
       'uricAcid',
     ]) {
@@ -303,14 +315,23 @@ class HealthAnalysisService {
   }
 
   static double? _value(HealthRecord record, String key) {
-    final direct = record.values[key];
-    if (direct != null && direct.isFinite) return direct.toDouble();
-    if (key == 'BMI') {
-      final fallback = record.values['bmi'];
-      if (fallback != null && fallback.isFinite) return fallback.toDouble();
+    for (final alias in _aliasesFor(key)) {
+      final value = record.values[alias];
+      if (value != null && value.isFinite) return value.toDouble();
     }
     return null;
   }
+
+  static List<String> _aliasesFor(String key) => switch (key) {
+    'bmi' || 'BMI' => const ['bmi', 'BMI'],
+    'bodyFatRate' ||
+    'bodyFatPercentage' => const ['bodyFatRate', 'bodyFatPercentage'],
+    'bodyWaterRate' ||
+    'bodyMoisture' => const ['bodyWaterRate', 'bodyMoisture'],
+    'basalMetabolicRate' ||
+    'basalMetabolism' => const ['basalMetabolicRate', 'basalMetabolism'],
+    _ => [key],
+  };
 
   static HealthMetricSummary _summary(
     List<HealthTrendPoint> points,

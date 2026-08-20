@@ -131,8 +131,60 @@ void main() {
         HealthMetric.bodyComposition,
         records,
       ),
-      ['BMI', 'bodyFatPercentage'],
+      ['bmi', 'bodyFatRate'],
     );
+  });
+
+  test('body composition aliases merge old and current SDK field names', () {
+    final records = [
+      record(
+        id: 'legacy',
+        metric: HealthMetric.bodyComposition,
+        at: DateTime.utc(2026, 8, 13, 8),
+        values: const {
+          'BMI': 21.2,
+          'bodyFatPercentage': 18.5,
+          'bodyMoisture': 56,
+          'basalMetabolism': 1420,
+        },
+      ),
+      record(
+        id: 'current',
+        metric: HealthMetric.bodyComposition,
+        at: DateTime.utc(2026, 8, 13, 9),
+        values: const {
+          'bmi': 22.1,
+          'bodyFatRate': 19.4,
+          'bodyWaterRate': 55.2,
+          'basalMetabolicRate': 1450,
+          'muscleMass': 48.3,
+        },
+      ),
+    ];
+
+    expect(
+      HealthAnalysisService.availableValueKeys(
+        HealthMetric.bodyComposition,
+        records,
+      ),
+      [
+        'bmi',
+        'bodyFatRate',
+        'muscleMass',
+        'bodyWaterRate',
+        'basalMetabolicRate',
+      ],
+    );
+
+    final analysis = const HealthAnalysisService().analyze(
+      metric: HealthMetric.bodyComposition,
+      records: records,
+      previousRecords: const [],
+      period: HealthTrendPeriod.day,
+      anchor: DateTime(2026, 8, 13),
+      selectedValueKey: 'bmi',
+    );
+    expect(analysis.points.map((point) => point.value), [21.2, 22.1]);
   });
 
   test(

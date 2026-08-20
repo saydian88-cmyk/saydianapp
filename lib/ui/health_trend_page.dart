@@ -613,8 +613,8 @@ class _TrendChartCard extends StatelessWidget {
           child: SizedBox(
             height: 250,
             child: isBar
-                ? _barChart(data)
-                : _lineChart(metric: metric, data: data),
+                ? _barChart(context, data)
+                : _lineChart(context: context, metric: metric, data: data),
           ),
         ),
       ),
@@ -623,6 +623,7 @@ class _TrendChartCard extends StatelessWidget {
 }
 
 Widget _lineChart({
+  required BuildContext context,
   required HealthMetric metric,
   required HealthTrendData data,
 }) {
@@ -644,17 +645,19 @@ Widget _lineChart({
   final min = allValues.reduce(math.min);
   final max = allValues.reduce(math.max);
   final padding = math.max((max - min) * 0.18, max == 0 ? 1.0 : max * 0.04);
+  final minY = math.max(0, min - padding).toDouble();
+  final maxY = (max + padding).toDouble();
   return LineChart(
     LineChartData(
-      minY: math.max(0, min - padding),
-      maxY: max + padding,
+      minY: minY,
+      maxY: maxY,
       borderData: FlBorderData(show: false),
       gridData: FlGridData(
         drawVerticalLine: false,
         getDrawingHorizontalLine: (_) =>
             const FlLine(color: SaydianColors.line, strokeWidth: 1),
       ),
-      titlesData: _titles(data),
+      titlesData: _titles(context, data, minY: minY, maxY: maxY),
       lineTouchData: LineTouchData(
         touchTooltipData: LineTouchTooltipData(
           getTooltipItems: (spots) => spots
@@ -695,73 +698,125 @@ Widget _lineChart({
   );
 }
 
-Widget _barChart(HealthTrendData data) => BarChart(
-  BarChartData(
-    borderData: FlBorderData(show: false),
-    gridData: FlGridData(
-      drawVerticalLine: false,
-      getDrawingHorizontalLine: (_) =>
-          const FlLine(color: SaydianColors.line, strokeWidth: 1),
+Widget _barChart(BuildContext context, HealthTrendData data) {
+  final maximum = data.points.map((point) => point.value).reduce(math.max);
+  final maxY = math.max(maximum * 1.15, 1).toDouble();
+  return BarChart(
+    BarChartData(
+      minY: 0,
+      maxY: maxY,
+      borderData: FlBorderData(show: false),
+      gridData: FlGridData(
+        drawVerticalLine: false,
+        getDrawingHorizontalLine: (_) =>
+            const FlLine(color: SaydianColors.line, strokeWidth: 1),
+      ),
+      titlesData: _titles(context, data, minY: 0, maxY: maxY),
+      barTouchData: BarTouchData(
+        touchTooltipData: BarTouchTooltipData(
+          getTooltipItem: (group, groupIndex, rod, rodIndex) => BarTooltipItem(
+            rod.toY.toStringAsFixed(1),
+            const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+          ),
+        ),
+      ),
+      barGroups: data.points
+          .asMap()
+          .entries
+          .map(
+            (entry) => BarChartGroupData(
+              x: entry.key,
+              barRods: [
+                BarChartRodData(
+                  toY: entry.value.value,
+                  color: SaydianColors.blue,
+                  width: data.points.length > 14 ? 8 : 14,
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(5),
+                  ),
+                ),
+              ],
+            ),
+          )
+          .toList(),
     ),
-    titlesData: _titles(data),
-    barTouchData: BarTouchData(
-      touchTooltipData: BarTouchTooltipData(
-        getTooltipItem: (group, groupIndex, rod, rodIndex) => BarTooltipItem(
-          rod.toY.toStringAsFixed(1),
-          const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+  );
+}
+
+FlTitlesData _titles(
+  BuildContext context,
+  HealthTrendData data, {
+  required double minY,
+  required double maxY,
+}) {
+  final interval = _niceAxisInterval(maxY - minY);
+  final textScale = MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 2.0);
+  final longest = math.max(_axisLabel(minY).length, _axisLabel(maxY).length);
+  final reservedSize = (longest * 7.4 * textScale + 12).clamp(42.0, 72.0);
+  return FlTitlesData(
+    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+    leftTitles: AxisTitles(
+      sideTitles: SideTitles(
+        showTitles: true,
+        reservedSize: reservedSize,
+        interval: interval,
+        getTitlesWidget: (value, meta) => Padding(
+          padding: const EdgeInsets.only(right: 6),
+          child: Text(
+            _axisLabel(value),
+            maxLines: 1,
+            style: const TextStyle(fontSize: 12, color: SaydianColors.muted),
+          ),
         ),
       ),
     ),
-    barGroups: data.points
-        .asMap()
-        .entries
-        .map(
-          (entry) => BarChartGroupData(
-            x: entry.key,
-            barRods: [
-              BarChartRodData(
-                toY: entry.value.value,
-                color: SaydianColors.blue,
-                width: data.points.length > 14 ? 8 : 14,
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(5),
-                ),
-              ),
-            ],
-          ),
-        )
-        .toList(),
-  ),
-);
-
-FlTitlesData _titles(HealthTrendData data) => FlTitlesData(
-  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-  leftTitles: const AxisTitles(
-    sideTitles: SideTitles(showTitles: true, reservedSize: 42),
-  ),
-  bottomTitles: AxisTitles(
-    sideTitles: SideTitles(
-      showTitles: true,
-      reservedSize: 30,
-      interval: math.max(1, (data.points.length / 4).ceilToDouble()),
-      getTitlesWidget: (value, meta) {
-        final index = value.round();
-        if (index < 0 || index >= data.points.length) {
-          return const SizedBox.shrink();
-        }
-        final point = data.points[index];
-        final text = data.range.end.difference(data.range.start).inDays <= 1
-            ? DateFormat('HH:mm').format(point.at)
-            : DateFormat('M/d').format(point.at);
-        return Padding(
-          padding: const EdgeInsets.only(top: 7),
-          child: Text(text, style: const TextStyle(fontSize: 13)),
-        );
-      },
+    bottomTitles: AxisTitles(
+      sideTitles: SideTitles(
+        showTitles: true,
+        reservedSize: 30,
+        interval: math.max(1, (data.points.length / 4).ceilToDouble()),
+        getTitlesWidget: (value, meta) {
+          final index = value.round();
+          if (index < 0 || index >= data.points.length) {
+            return const SizedBox.shrink();
+          }
+          final point = data.points[index];
+          final text = data.range.end.difference(data.range.start).inDays <= 1
+              ? DateFormat('HH:mm').format(point.at)
+              : DateFormat('M/d').format(point.at);
+          return Padding(
+            padding: const EdgeInsets.only(top: 7),
+            child: Text(text, style: const TextStyle(fontSize: 13)),
+          );
+        },
+      ),
     ),
-  ),
-);
+  );
+}
+
+double _niceAxisInterval(double span) {
+  if (!span.isFinite || span <= 0) return 1;
+  final raw = span / 4;
+  final magnitude = math
+      .pow(10, (math.log(raw) / math.ln10).floor())
+      .toDouble();
+  final normalized = raw / magnitude;
+  final step = normalized <= 1
+      ? 1
+      : normalized <= 2
+      ? 2
+      : normalized <= 5
+      ? 5
+      : 10;
+  return step * magnitude;
+}
+
+String _axisLabel(double value) {
+  if (value.abs() >= 1000) return value.toStringAsFixed(0);
+  if (value.abs() >= 10) return value.toStringAsFixed(0);
+  return value.toStringAsFixed(1).replaceFirst(RegExp(r'\.0$'), '');
+}
 
 class _RecordTile extends StatelessWidget {
   const _RecordTile({
@@ -868,12 +923,19 @@ String _fieldLabel(String key) => switch (key) {
   'averageTimeInterval' || 'qt' => 'QT间期',
   'averageHRV' || 'hrv' => 'HRV',
   'BMI' || 'bmi' => 'BMI',
-  'bodyFatPercentage' => '体脂率',
+  'bodyFatRate' || 'bodyFatPercentage' => '体脂率',
   'fatMass' => '脂肪量',
+  'fatFreeMass' => '去脂体重',
+  'muscleRate' => '肌肉率',
   'muscleMass' => '肌肉量',
-  'bodyMoisture' => '身体水分',
+  'subcutaneousFat' => '皮下脂肪率',
+  'bodyWaterRate' || 'bodyMoisture' => '体水分率',
+  'waterMass' => '水分量',
+  'skeletalMuscleRate' => '骨骼肌率',
   'boneMass' => '骨量',
-  'basalMetabolism' => '基础代谢',
+  'proteinRate' => '蛋白质率',
+  'proteinMass' => '蛋白质量',
+  'basalMetabolicRate' || 'basalMetabolism' => '基础代谢',
   'uricAcid' => '尿酸',
   'totalCholesterol' => '总胆固醇',
   'triglycerides' => '甘油三酯',
@@ -884,11 +946,31 @@ String _fieldLabel(String key) => switch (key) {
 
 String _unit(HealthMetric metric, HealthRecord record, String key) {
   if (metric == HealthMetric.bodyComposition) {
-    if (key == 'bodyFatPercentage' || key == 'bodyMoisture') return '%';
-    if (key == 'fatMass' || key == 'muscleMass' || key == 'boneMass') {
+    if (const {
+      'bodyFatRate',
+      'bodyFatPercentage',
+      'muscleRate',
+      'subcutaneousFat',
+      'bodyWaterRate',
+      'bodyMoisture',
+      'skeletalMuscleRate',
+      'proteinRate',
+    }.contains(key)) {
+      return '%';
+    }
+    if (const {
+      'fatMass',
+      'fatFreeMass',
+      'muscleMass',
+      'waterMass',
+      'boneMass',
+      'proteinMass',
+    }.contains(key)) {
       return 'kg';
     }
-    if (key == 'basalMetabolism') return 'kcal';
+    if (key == 'basalMetabolicRate' || key == 'basalMetabolism') {
+      return 'kcal/日';
+    }
     return '';
   }
   if (metric == HealthMetric.bloodComposition) {

@@ -61,6 +61,7 @@ class AppController extends ChangeNotifier {
   int measurementProgress = 0;
   bool measurementWearConfirmed = true;
   List<num> measurementSamples = const [];
+  int measurementSampleFrequency = 250;
   String storageStatus = '正在准备数据';
   String sdkStatus = '等待连接';
   String syncStatus = '尚未同步';
@@ -628,6 +629,7 @@ class AppController extends ChangeNotifier {
     measurementProgress = 0;
     measurementWearConfirmed = true;
     measurementSamples = const [];
+    measurementSampleFrequency = 250;
     errorMessage = null;
     if (connectedDevice == null) {
       errorMessage = '请先连接手表';
@@ -695,6 +697,7 @@ class AppController extends ChangeNotifier {
     measurementProgress = 0;
     measurementWearConfirmed = true;
     measurementSamples = const [];
+    measurementSampleFrequency = 250;
     try {
       await _wearable
           .stopMeasurement(metric)
@@ -1750,14 +1753,22 @@ class AppController extends ChangeNotifier {
             measurementProgress;
         measurementWearConfirmed =
             '${event.payload['deviceState'] ?? ''}' != 'UNPASS_WEAR';
+        final frequency = (event.payload['frequency'] as num?)?.toInt();
+        if (frequency != null && frequency >= 50 && frequency <= 1000) {
+          measurementSampleFrequency = frequency;
+        }
         final samples = event.payload['samples'];
         if (samples is List) {
           final combined = <num>[
             ...measurementSamples,
             ...samples.whereType<num>(),
           ];
-          measurementSamples = combined.length > 480
-              ? combined.sublist(combined.length - 480)
+          final windowSamples = (measurementSampleFrequency * 6).clamp(
+            480,
+            3000,
+          );
+          measurementSamples = combined.length > windowSamples
+              ? combined.sublist(combined.length - windowSamples)
               : combined;
         }
       }
