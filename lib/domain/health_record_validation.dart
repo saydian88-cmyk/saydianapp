@@ -13,8 +13,19 @@ bool hasSaneWearableTransportValues(HealthRecord record) {
     HealthMetric.bloodOxygen => _inRange(record.values['value'], 2, 100),
     HealthMetric.bloodPressure => _hasSaneBloodPressure(record.values),
     HealthMetric.bodyTemperature => _inRange(record.values['value'], 20, 45),
+    HealthMetric.ecg => _hasSaneEcg(record.values),
     _ => true,
   };
+}
+
+bool _hasSaneEcg(Map<String, num> values) {
+  final heartRate = values['meanHeartRate'] ?? values['averageHeartRate'];
+  final hrv = values['averageHRV'] ?? values['hrv'];
+  final frequency = values['sampleFrequency'];
+  if (heartRate != null && !_inRange(heartRate, 30, 210)) return false;
+  if (hrv != null && !_inRange(hrv, 1, 250)) return false;
+  if (frequency != null && !_inRange(frequency, 50, 1000)) return false;
+  return heartRate != null || hrv != null;
 }
 
 bool _hasSaneBloodPressure(Map<String, num> values) {

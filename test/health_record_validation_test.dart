@@ -31,6 +31,22 @@ void main() {
         _record(HealthMetric.bodyTemperature, {'value': 35.9}).isSane,
         isTrue,
       );
+      expect(
+        _record(HealthMetric.ecg, {
+          'meanHeartRate': 255,
+          'averageHRV': 85,
+          'sampleFrequency': 500,
+        }).isSane,
+        isFalse,
+      );
+      expect(
+        _record(HealthMetric.ecg, {
+          'meanHeartRate': 88,
+          'averageHRV': 85,
+          'sampleFrequency': 500,
+        }).isSane,
+        isTrue,
+      );
     });
 
     test('does not reinterpret manually entered data as an SDK sentinel', () {

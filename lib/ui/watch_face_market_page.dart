@@ -10,11 +10,13 @@ import 'app_theme.dart';
 class DeviceWatchFaceMarketPage extends StatefulWidget {
   const DeviceWatchFaceMarketPage({
     required this.controller,
+    this.profile = DeviceWatchFaceMarketProfile.w9s,
     this.service,
     super.key,
   });
 
   final AppController controller;
+  final DeviceWatchFaceMarketProfile profile;
   final DeviceWatchFaceMarketService? service;
 
   @override
@@ -54,7 +56,10 @@ class _DeviceWatchFaceMarketPageState extends State<DeviceWatchFaceMarketPage> {
       }
     });
     try {
-      final result = await _service.loadPage(page: nextPage);
+      final result = await _service.loadPage(
+        page: nextPage,
+        profile: widget.profile,
+      );
       if (!mounted) return;
       setState(() {
         _items.addAll(result.items);
@@ -102,14 +107,15 @@ class _DeviceWatchFaceMarketPageState extends State<DeviceWatchFaceMarketPage> {
           if (mounted) setState(() => _downloadProgress = progress);
         },
       );
-      final saved = await widget.controller.writeDeviceFeature(
-        DeviceFeature.watchFaces,
-        {
-          'operation': 'upload_network',
-          'filePath': filePath,
-          'name': item.name,
-        },
-      );
+      final saved = await widget.controller
+          .writeDeviceFeature(DeviceFeature.watchFaces, {
+            'operation': 'upload_network',
+            'filePath': filePath,
+            'name': item.name,
+            'screenWidth': widget.profile.screenWidth,
+            'screenHeight': widget.profile.screenHeight,
+            'dialShape': widget.profile.dialShape,
+          });
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

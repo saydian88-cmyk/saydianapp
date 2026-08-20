@@ -75,10 +75,18 @@ HealthInterpretation interpretHealthRecord(HealthRecord record) {
         detail: '手表结果用于健康趋势管理，不能替代医用体温计。',
       );
     case HealthMetric.ecg:
-      if ((values['deviceAbnormalFlags'] ?? 0) > 0) {
+      final riskSignals = [
+        values['deviceAbnormalFlags'] ?? 0,
+        values['diseaseRisk'] ?? 0,
+        values['myocarditisRisk'] ?? 0,
+        values['chdRisk'] ?? 0,
+        values['angioscleroticRisk'] ?? 0,
+      ];
+      if (riskSignals.any((value) => value > 0)) {
         return const HealthInterpretation(
           title: '设备标记到需关注的心电特征',
-          detail: '该结果不是医学诊断；如反复出现或伴胸闷、心悸等不适，请携带记录咨询专业医务人员。',
+          detail:
+              '已结合手表返回的节律及风险标记进行解读。该结果不是医学诊断；如反复出现或伴胸闷、心悸等不适，请携带完整波形咨询专业医务人员。',
         );
       }
       return const HealthInterpretation(
@@ -127,6 +135,15 @@ String healthValueLabel(String key, HealthMetric metric) => switch (key) {
   'diseaseRisk' => '设备风险指数',
   'pressureIndex' => '压力指数',
   'fatigueIndex' => '疲劳指数',
+  'myocarditisRisk' => '心肌风险指数',
+  'chdRisk' => '冠心风险指数',
+  'angioscleroticRisk' => '动脉硬化风险指数',
+  'qrsTime' => 'QRS 时限',
+  'qrsAmplitude' => 'QRS 振幅',
+  'pulseWaveVelocity' => '脉搏波速度',
+  'stAmplitude' => 'ST 振幅',
+  'sdnn' => 'SDNN',
+  'rmssd' => 'RMSSD',
   'bmi' || 'BMI' => 'BMI',
   'bodyFatRate' || 'bodyFatPercentage' => '体脂率',
   'fatMass' => '脂肪量',
@@ -158,8 +175,15 @@ String healthValueUnit(String key, HealthRecord record) => switch (key) {
   'diseaseRisk' ||
   'pressureIndex' ||
   'fatigueIndex' ||
+  'myocarditisRisk' ||
+  'chdRisk' ||
+  'angioscleroticRisk' ||
+  'qrsAmplitude' ||
+  'stAmplitude' ||
   'bmi' ||
   'BMI' => '',
+  'qrsTime' || 'sdnn' || 'rmssd' => 'ms',
+  'pulseWaveVelocity' => 'cm/s',
   'bodyFatRate' ||
   'bodyFatPercentage' ||
   'muscleRate' ||

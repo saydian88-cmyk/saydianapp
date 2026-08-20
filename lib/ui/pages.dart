@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -8,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../domain/feature_models.dart';
+import '../domain/ecg_waveform.dart';
 import '../domain/health_interpretation.dart';
 import '../domain/models.dart';
 import '../services/app_controller.dart';
@@ -1364,7 +1366,7 @@ class HealthPage extends StatelessWidget {
                       ),
                       SizedBox(height: 6),
                       Text(
-                        '点击支持的指标可开始测量',
+                        '点击指标查看详情与历史趋势',
                         style: TextStyle(color: Colors.white60, fontSize: 12),
                       ),
                     ],
@@ -1387,31 +1389,17 @@ class HealthPage extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 18),
-          for (final metric in coreMetrics) ...[
+          for (final metric in coreMetrics.where(
+            (metric) =>
+                metric != HealthMetric.bloodComposition ||
+                controller.capabilities?.supports(metric) == true,
+          )) ...[
             _HealthRow(
               controller: controller,
               metric: metric,
               record: latest[metric],
               supported: controller.capabilities?.supports(metric),
               connected: controller.connectedDevice != null,
-              onMeasure:
-                  const {
-                    HealthMetric.heartRate,
-                    HealthMetric.bloodOxygen,
-                    HealthMetric.bloodPressure,
-                    HealthMetric.bloodGlucose,
-                    HealthMetric.bodyTemperature,
-                    HealthMetric.ecg,
-                    HealthMetric.hrv,
-                    HealthMetric.bodyComposition,
-                    HealthMetric.bloodComposition,
-                  }.contains(metric)
-                  ? () => _showHealthMeasurementDialog(
-                      context,
-                      controller,
-                      metric,
-                    )
-                  : null,
             ),
             const SizedBox(height: 10),
           ],
@@ -1630,8 +1618,7 @@ class _HealthMeasurementDialogState extends State<_HealthMeasurementDialog> {
                 ],
                 if (!isNew &&
                     !failed &&
-                    (widget.metric == HealthMetric.ecg ||
-                        widget.metric == HealthMetric.hrv) &&
+                    widget.metric == HealthMetric.ecg &&
                     widget.controller.measurementSamples.length > 1) ...[
                   const SizedBox(height: 14),
                   SizedBox(
@@ -1647,6 +1634,21 @@ class _HealthMeasurementDialogState extends State<_HealthMeasurementDialog> {
                   ),
                 ],
                 if (!isNew && !failed) ...[
+                  if (widget.metric == HealthMetric.bloodPressure) ...[
+                    const SizedBox(height: 14),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: SaydianColors.brandGoldSoft,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Text(
+                        '本次仅为静态监测，结果仅供参考，如需更加准确的数据，请通过手表气泵气囊式检测',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 13, height: 1.45),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   LinearProgressIndicator(
                     value: widget.controller.measurementProgress > 0
@@ -1693,14 +1695,10 @@ class _SportEntryPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       key: const Key('health-sport-entries'),
-      padding: const EdgeInsets.fromLTRB(14, 15, 14, 12),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFFFFF7F3), Color(0xFFFFFBED)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        border: Border.all(color: const Color(0x22D20B27)),
+        color: Colors.white,
+        border: Border.all(color: const Color(0x18D20B27)),
         borderRadius: BorderRadius.circular(22),
         boxShadow: const [
           BoxShadow(
@@ -1712,6 +1710,43 @@ class _SportEntryPanel extends StatelessWidget {
       ),
       child: Column(
         children: [
+          Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: SaydianColors.brandRedSoft,
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: const Icon(
+                  Icons.directions_run_rounded,
+                  color: SaydianColors.brandRed,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '开始今日运动',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    Text(
+                      '选择运动类型，连接手表后同步记录',
+                      style: TextStyle(
+                        color: SaydianColors.muted,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
           LayoutBuilder(
             builder: (context, constraints) {
               final enlarged = MediaQuery.textScalerOf(context).scale(1) > 1.25;
@@ -1740,7 +1775,7 @@ class _SportEntryPanel extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Material(
-            color: const Color(0xFF741A2C),
+            color: SaydianColors.brandRedSoft,
             borderRadius: BorderRadius.circular(17),
             clipBehavior: Clip.antiAlias,
             child: ListTile(
@@ -1751,12 +1786,12 @@ class _SportEntryPanel extends StatelessWidget {
               ),
               leading: const _SettingsIcon(
                 icon: Icons.history_rounded,
-                color: SaydianColors.brandGold,
+                color: SaydianColors.brandRed,
               ),
               title: const Text(
                 '运动记录',
                 style: TextStyle(
-                  color: Colors.white,
+                  color: SaydianColors.ink,
                   fontWeight: FontWeight.w800,
                 ),
               ),
@@ -1764,11 +1799,14 @@ class _SportEntryPanel extends StatelessWidget {
                 controller.connectedDevice == null
                     ? '连接手表后读取运动记录'
                     : '已读取 ${controller.sportRecords.length} 条记录',
-                style: const TextStyle(color: Color(0xFFDDE0EA), fontSize: 13),
+                style: const TextStyle(
+                  color: SaydianColors.muted,
+                  fontSize: 13,
+                ),
               ),
               trailing: const Icon(
                 Icons.chevron_right_rounded,
-                color: Colors.white,
+                color: SaydianColors.brandRed,
               ),
             ),
           ),
@@ -1792,11 +1830,11 @@ class _SportEntry extends StatelessWidget {
       SportMode.cycling => Icons.directions_bike_rounded,
       SportMode.hiking => Icons.hiking_rounded,
     };
-    final colors = switch (mode) {
-      SportMode.running => const [Color(0xFFD20B27), Color(0xFF951126)],
-      SportMode.walking => const [Color(0xFFE48A22), Color(0xFFBA5E15)],
-      SportMode.cycling => const [Color(0xFF344B7D), Color(0xFF1C294A)],
-      SportMode.hiking => const [Color(0xFF3F795F), Color(0xFF285340)],
+    final color = switch (mode) {
+      SportMode.running => SaydianColors.brandRed,
+      SportMode.walking => SaydianColors.brandGoldDark,
+      SportMode.cycling => const Color(0xFF9E2435),
+      SportMode.hiking => const Color(0xFF8A6432),
     };
     return InkWell(
       onTap: onTap,
@@ -1809,21 +1847,11 @@ class _SportEntry extends StatelessWidget {
               width: 54,
               height: 54,
               decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: colors,
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
+                color: color.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(18),
-                boxShadow: [
-                  BoxShadow(
-                    color: colors.first.withValues(alpha: 0.24),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
+                border: Border.all(color: color.withValues(alpha: 0.18)),
               ),
-              child: Icon(icon, color: Colors.white, size: 28),
+              child: Icon(icon, color: color, size: 28),
             ),
             const SizedBox(height: 8),
             Text(
@@ -2350,7 +2378,6 @@ class _HealthRow extends StatelessWidget {
     required this.record,
     required this.supported,
     required this.connected,
-    required this.onMeasure,
   });
 
   final AppController controller;
@@ -2358,7 +2385,6 @@ class _HealthRow extends StatelessWidget {
   final HealthRecord? record;
   final bool? supported;
   final bool connected;
-  final VoidCallback? onMeasure;
 
   @override
   Widget build(BuildContext context) {
@@ -2400,7 +2426,12 @@ class _HealthRow extends StatelessWidget {
     return Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
-        onTap: connected && supported == true ? onMeasure : null,
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) =>
+                HealthHistoryPage(controller: controller, metric: metric),
+          ),
+        ),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 14),
           child: Row(
@@ -2455,26 +2486,8 @@ class _HealthRow extends StatelessWidget {
                   ),
                 ],
               ),
-              if (onMeasure != null) ...[
-                const SizedBox(width: 7),
-                IconButton(
-                  tooltip: '手动测量',
-                  onPressed: connected && supported == true ? onMeasure : null,
-                  icon: const Icon(Icons.play_circle_fill_rounded),
-                ),
-              ],
-              IconButton(
-                tooltip: '历史数据',
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => HealthHistoryPage(
-                      controller: controller,
-                      metric: metric,
-                    ),
-                  ),
-                ),
-                icon: const Icon(Icons.chevron_right_rounded),
-              ),
+              const SizedBox(width: 8),
+              const Icon(Icons.chevron_right_rounded),
             ],
           ),
         ),
@@ -2540,13 +2553,18 @@ class _LiveEcgPainter extends CustomPainter {
         ? samples.sublist(samples.length - window)
         : samples;
     if (visible.length < 2) return;
-    final minimum = visible.reduce(math.min).toDouble();
-    final maximum = visible.reduce(math.max).toDouble();
-    final span = math.max(maximum - minimum, 1);
+    final waveform = prepareEcgDisplayWaveform(
+      visible,
+      maximumPoints: math.max(2, (size.width * 2).round()),
+    );
+    if (!waveform.hasVariation) return;
+    final minimum = waveform.minimum;
+    final maximum = waveform.maximum;
+    final span = maximum - minimum;
     final path = Path();
-    for (var index = 0; index < visible.length; index++) {
-      final x = index / math.max(window - 1, 1) * size.width;
-      final normalized = (visible[index].toDouble() - minimum) / span;
+    for (var index = 0; index < waveform.samples.length; index++) {
+      final x = index / math.max(waveform.samples.length - 1, 1) * size.width;
+      final normalized = (waveform.samples[index] - minimum) / span;
       final y = size.height - normalized * (size.height - 10) - 5;
       if (index == 0) {
         path.moveTo(x, y);
@@ -3186,6 +3204,7 @@ class _AiChatPageState extends State<AiChatPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(widget.app == 2 ? '运动管家' : 'AI 健康管家')),
+      backgroundColor: const Color(0xFFF7F4F1),
       body: ListenableBuilder(
         listenable: widget.controller,
         builder: (context, _) => Column(
@@ -3193,9 +3212,14 @@ class _AiChatPageState extends State<AiChatPage> {
             Expanded(
               child: widget.controller.aiMessages.isEmpty
                   ? const Center(
-                      child: Text(
-                        '你好，有什么可以帮你？',
-                        style: TextStyle(color: SaydianColors.muted),
+                      child: Padding(
+                        padding: EdgeInsets.all(28),
+                        child: FeatureStateCard(
+                          message: '您好，我是 AI 健康管家',
+                          detail: '可以向我咨询日常健康管理问题，回答仅供参考，不能替代医生诊断。',
+                          icon: Icons.health_and_safety_outlined,
+                          color: SaydianColors.brandRed,
+                        ),
                       ),
                     )
                   : ListView.builder(
@@ -3208,47 +3232,89 @@ class _AiChatPageState extends State<AiChatPage> {
                         final failed = message['send_failed'] == true;
                         final text =
                             '${message['message'] ?? message['content'] ?? ''}';
-                        return Align(
-                          alignment: mine
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: Container(
-                            constraints: const BoxConstraints(maxWidth: 300),
-                            margin: const EdgeInsets.only(bottom: 10),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 15,
-                              vertical: 11,
+                        final bubble = Container(
+                          constraints: BoxConstraints(
+                            maxWidth: MediaQuery.sizeOf(context).width * .7,
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 15,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            color: mine ? SaydianColors.brandRed : Colors.white,
+                            border: mine
+                                ? null
+                                : Border.all(color: const Color(0x11000000)),
+                            borderRadius: BorderRadius.only(
+                              topLeft: const Radius.circular(18),
+                              topRight: const Radius.circular(18),
+                              bottomLeft: Radius.circular(mine ? 18 : 5),
+                              bottomRight: Radius.circular(mine ? 5 : 18),
                             ),
-                            decoration: BoxDecoration(
-                              color: mine
-                                  ? SaydianColors.ink
-                                  : const Color(0xFFE8EFFF),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  text,
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x0D000000),
+                                blurRadius: 10,
+                                offset: Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                text,
+                                style: TextStyle(
+                                  color: mine
+                                      ? Colors.white
+                                      : SaydianColors.ink,
+                                  height: 1.5,
+                                ),
+                              ),
+                              if (failed) ...[
+                                const SizedBox(height: 5),
+                                const Text(
+                                  '发送失败，请检查网络后重试',
                                   style: TextStyle(
-                                    color: mine
-                                        ? Colors.white
-                                        : SaydianColors.ink,
-                                    height: 1.45,
+                                    color: Color(0xFFFFD7D7),
+                                    fontSize: 12,
                                   ),
                                 ),
-                                if (failed) ...[
-                                  const SizedBox(height: 5),
-                                  const Text(
-                                    '发送失败，请检查网络后重试',
-                                    style: TextStyle(
-                                      color: Color(0xFFFFB4B4),
-                                      fontSize: 11,
-                                    ),
-                                  ),
-                                ],
                               ],
-                            ),
+                            ],
+                          ),
+                        );
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 14),
+                          child: Row(
+                            mainAxisAlignment: mine
+                                ? MainAxisAlignment.end
+                                : MainAxisAlignment.start,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (!mine) ...[
+                                const CircleAvatar(
+                                  radius: 18,
+                                  backgroundColor: SaydianColors.brandRedSoft,
+                                  foregroundColor: SaydianColors.brandRed,
+                                  child: Icon(
+                                    Icons.health_and_safety_outlined,
+                                    size: 20,
+                                  ),
+                                ),
+                                const SizedBox(width: 9),
+                              ],
+                              Flexible(child: bubble),
+                              if (mine) ...[
+                                const SizedBox(width: 9),
+                                const CircleAvatar(
+                                  radius: 18,
+                                  backgroundColor: SaydianColors.ink,
+                                  foregroundColor: Colors.white,
+                                  child: Icon(Icons.person_rounded, size: 20),
+                                ),
+                              ],
+                            ],
                           ),
                         );
                       },
@@ -3256,8 +3322,12 @@ class _AiChatPageState extends State<AiChatPage> {
             ),
             SafeArea(
               top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  border: Border(top: BorderSide(color: Color(0x11000000))),
+                ),
                 child: Row(
                   children: [
                     Expanded(
@@ -3374,14 +3444,6 @@ class DevicePage extends StatelessWidget {
                             children: [
                               Text(
                                 '设备同步：${controller.syncStatus}',
-                                style: const TextStyle(
-                                  color: SaydianColors.muted,
-                                  fontSize: 11.5,
-                                  height: 1.3,
-                                ),
-                              ),
-                              Text(
-                                '云端同步：${controller.cloudSyncStatus}',
                                 style: const TextStyle(
                                   color: SaydianColors.muted,
                                   fontSize: 11.5,
@@ -4039,7 +4101,6 @@ class DeviceInfoPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final device = controller.connectedDevice;
-    final capabilities = controller.capabilities;
     return Scaffold(
       appBar: AppBar(title: const Text('关于设备')),
       body: ListView(
@@ -4080,34 +4141,6 @@ class DeviceInfoPage extends StatelessWidget {
                   ),
                   subtitle: Text(
                     device?.macAddress ?? device?.nativeId ?? '--',
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          Card(
-            child: Column(
-              children: [
-                ListTile(
-                  title: const Text('支持的健康项目'),
-                  subtitle: Text(
-                    capabilities == null || capabilities.metrics.isEmpty
-                        ? '暂时未读取到相关信息'
-                        : capabilities.metrics
-                              .map((metric) => metric.label)
-                              .join('、'),
-                  ),
-                ),
-                const Divider(indent: 16),
-                ListTile(
-                  title: const Text('支持的设备功能'),
-                  subtitle: Text(
-                    capabilities == null || capabilities.features.isEmpty
-                        ? '暂时未读取到相关信息'
-                        : capabilities.features
-                              .map((feature) => feature.label)
-                              .join('、'),
                   ),
                 ),
               ],
@@ -4167,7 +4200,26 @@ class _NotificationsPageState extends State<NotificationsPage> {
       body: ListenableBuilder(
         listenable: widget.controller,
         builder: (context, _) {
-          final values = widget.controller.notifications;
+          final healthWarnings = widget.controller.healthWarningAlerts
+              .asMap()
+              .entries
+              .map(
+                (entry) => <String, Object?>{
+                  'id': -(entry.key + 1),
+                  '_localHealthWarning': true,
+                  'title': entry.value.title,
+                  'content': entry.value.message,
+                  'created_at': DateFormat(
+                    'yyyy-MM-dd HH:mm',
+                  ).format(entry.value.triggeredAt.toLocal()),
+                  'kind': 'health_warning',
+                },
+              )
+              .toList(growable: false);
+          final values = <Map<String, Object?>>[
+            ...healthWarnings,
+            ...widget.controller.notifications,
+          ];
           if (values.isEmpty) {
             return Center(
               child: Text(
@@ -4185,7 +4237,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
               itemBuilder: (context, index) {
                 final item = values[index];
                 final id = int.tryParse('${item['id'] ?? ''}');
+                final isHealthWarning = item['kind'] == 'health_warning';
                 return Card(
+                  clipBehavior: Clip.antiAlias,
                   child: ListTile(
                     onTap: id == null
                         ? null
@@ -4198,16 +4252,34 @@ class _NotificationsPageState extends State<NotificationsPage> {
                               ),
                             ),
                           ),
-                    leading: const CircleAvatar(
-                      child: Icon(Icons.notifications_none_rounded),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    leading: CircleAvatar(
+                      backgroundColor: isHealthWarning
+                          ? SaydianColors.brandRedSoft
+                          : SaydianColors.techBlueSoft,
+                      foregroundColor: isHealthWarning
+                          ? SaydianColors.brandRed
+                          : SaydianColors.techBlue,
+                      child: Icon(
+                        isHealthWarning
+                            ? Icons.health_and_safety_rounded
+                            : Icons.notifications_none_rounded,
+                      ),
                     ),
                     title: Text(
                       '${item['title'] ?? item['name'] ?? '系统消息'}',
                       style: const TextStyle(fontWeight: FontWeight.w800),
                     ),
                     subtitle: Text(
-                      '${item['created_at'] ?? item['createdAt'] ?? ''}',
-                      maxLines: 1,
+                      [
+                        _notificationPreview(item),
+                        '${item['created_at'] ?? item['createdAt'] ?? ''}',
+                      ].where((value) => value.trim().isNotEmpty).join('\n'),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     trailing: const Icon(Icons.chevron_right_rounded),
                   ),
@@ -4247,6 +4319,7 @@ class _NotificationDetailPageState extends State<NotificationDetailPage> {
   }
 
   Future<void> _load() async {
+    if (widget.initial['_localHealthWarning'] == true) return;
     final value = await widget.controller.loadNotification(widget.id);
     if (mounted && value.isNotEmpty) setState(() => _value = value);
   }
@@ -4255,25 +4328,126 @@ class _NotificationDetailPageState extends State<NotificationDetailPage> {
   Widget build(BuildContext context) {
     final title = '${_value['title'] ?? _value['name'] ?? '消息详情'}';
     final raw = '${_value['content'] ?? _value['description'] ?? ''}';
-    final content = _plainTextFromHtml(raw);
+    final content = _resolveNotificationContent(_value, raw);
+    final isHealthWarning = _value['kind'] == 'health_warning';
+    final createdAt = '${_value['created_at'] ?? _value['createdAt'] ?? ''}';
     return Scaffold(
       appBar: AppBar(title: const Text('消息详情')),
+      backgroundColor: const Color(0xFFF7F4F1),
       body: ListView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(16),
         children: [
-          Text(
-            title,
-            style: const TextStyle(fontSize: 23, fontWeight: FontWeight.w900),
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: isHealthWarning
+                    ? const [Color(0xFF9E1025), Color(0xFFD20B27)]
+                    : const [Color(0xFF11182D), Color(0xFF344B7D)],
+              ),
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 25,
+                  backgroundColor: Colors.white.withValues(alpha: .16),
+                  foregroundColor: Colors.white,
+                  child: Icon(
+                    isHealthWarning
+                        ? Icons.health_and_safety_rounded
+                        : Icons.mark_email_read_outlined,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      if (createdAt.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          createdAt,
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 16),
-          Text(
-            content.isEmpty ? '暂无消息正文' : content,
-            style: const TextStyle(height: 1.7),
+          const SizedBox(height: 14),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Text(
+                content.isEmpty ? '暂无消息正文' : content,
+                style: const TextStyle(fontSize: 16, height: 1.75),
+              ),
+            ),
           ),
+          if (isHealthWarning) ...[
+            const SizedBox(height: 12),
+            const _InlineNotice(
+              message: '健康预警用于及时提醒，不作为医疗诊断；如有明显不适，请及时就医。',
+              icon: Icons.info_outline_rounded,
+              color: SaydianColors.orange,
+            ),
+          ],
         ],
       ),
     );
   }
+}
+
+String _notificationPreview(Map<String, Object?> value) {
+  final raw = '${value['content'] ?? value['description'] ?? ''}';
+  return _resolveNotificationContent(value, raw);
+}
+
+String _resolveNotificationContent(Map<String, Object?> value, String raw) {
+  final orderNumber = _notificationOrderNumber(value);
+  final fallback = orderNumber ?? '订单号暂未返回';
+  return _plainTextFromHtml(raw).replaceAll('#order_sn#', fallback);
+}
+
+String? _notificationOrderNumber(Object? value, [int depth = 0]) {
+  if (depth > 5 || value == null) return null;
+  if (value is Map) {
+    for (final key in const ['order_sn', 'orderSn', 'order_no', 'orderNo']) {
+      final text = '${value[key] ?? ''}'.trim();
+      if (text.isNotEmpty && text != '#order_sn#') return text;
+    }
+    for (final nested in value.values) {
+      final result = _notificationOrderNumber(nested, depth + 1);
+      if (result != null) return result;
+    }
+  } else if (value is Iterable) {
+    for (final nested in value) {
+      final result = _notificationOrderNumber(nested, depth + 1);
+      if (result != null) return result;
+    }
+  } else if (value is String) {
+    final text = value.trim();
+    if ((text.startsWith('{') && text.endsWith('}')) ||
+        (text.startsWith('[') && text.endsWith(']'))) {
+      try {
+        return _notificationOrderNumber(jsonDecode(text), depth + 1);
+      } catch (_) {
+        return null;
+      }
+    }
+  }
+  return null;
 }
 
 class CarePage extends StatelessWidget {
@@ -4982,9 +5156,9 @@ class SettingsPage extends StatelessWidget {
             decoration: BoxDecoration(
               gradient: const LinearGradient(
                 colors: [
-                  Color(0xFF11182D),
-                  Color(0xFF252E4C),
-                  Color(0xFF741A2C),
+                  Color(0xFF081322),
+                  Color(0xFF17304B),
+                  Color(0xFF7E1728),
                 ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
@@ -5049,8 +5223,48 @@ class SettingsPage extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(height: 18),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF2F5F8),
+            border: Border.all(color: const Color(0x17344B7D)),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.shield_outlined,
+                color: SaydianColors.techBlue,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  '健康档案安全守护中',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              Text(
+                controller.connectedDevice == null ? '设备未连接' : '设备在线',
+                style: TextStyle(
+                  color: controller.connectedDevice == null
+                      ? SaydianColors.muted
+                      : SaydianColors.green,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
         Card(
+          color: const Color(0xFFF8FAFD),
+          shape: RoundedRectangleBorder(
+            side: const BorderSide(color: Color(0x17344B7D)),
+            borderRadius: BorderRadius.circular(20),
+          ),
           child: Column(
             children: [
               Padding(
@@ -5113,6 +5327,11 @@ class SettingsPage extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         Card(
+          color: const Color(0xFFFFFCF7),
+          shape: RoundedRectangleBorder(
+            side: const BorderSide(color: Color(0x1FD8B848)),
+            borderRadius: BorderRadius.circular(20),
+          ),
           child: Column(
             children: [
               _MyQuickEntry(
@@ -5154,6 +5373,11 @@ class SettingsPage extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         Card(
+          color: const Color(0xFFF8FAFD),
+          shape: RoundedRectangleBorder(
+            side: const BorderSide(color: Color(0x17344B7D)),
+            borderRadius: BorderRadius.circular(20),
+          ),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(8, 16, 8, 14),
             child: Column(
@@ -5783,8 +6007,15 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         ? _order['product'] as List
         : const [];
     final status = int.tryParse('${_order['order_status'] ?? ''}');
+    final receiver = '${_order['receiver_name'] ?? _order['realname'] ?? '--'}';
+    final mobile = '${_order['receiver_mobile'] ?? _order['mobile'] ?? '--'}';
+    final region = '${_order['receiver_region_name'] ?? ''}'.trim();
+    final address =
+        '${_order['receiver_address'] ?? _order['address'] ?? '--'}';
+    final orderNumber = '${_order['order_sn'] ?? widget.id}';
     return Scaffold(
       appBar: AppBar(title: const Text('订单详情')),
+      backgroundColor: const Color(0xFFF7F4F1),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
@@ -5799,60 +6030,225 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                       color: SaydianColors.orange,
                     )
                   else ...[
+                    Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF9E1025), Color(0xFFD20B27)],
+                        ),
+                        borderRadius: BorderRadius.circular(22),
+                      ),
+                      child: Row(
+                        children: [
+                          const CircleAvatar(
+                            radius: 25,
+                            backgroundColor: Color(0x2AFFFFFF),
+                            foregroundColor: Colors.white,
+                            child: Icon(Icons.shopping_bag_outlined),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _orderStatusLabel(status),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  _orderStatusDescription(status),
+                                  style: const TextStyle(color: Colors.white70),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     Card(
                       child: Padding(
                         padding: const EdgeInsets.all(16),
-                        child: Column(
+                        child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              '订单 ${_order['order_sn'] ?? widget.id}',
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w900,
+                            const Icon(
+                              Icons.location_on_outlined,
+                              color: SaydianColors.brandRed,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '$receiver  $mobile',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 7),
+                                  Text(
+                                    '$region$address',
+                                    style: const TextStyle(
+                                      color: SaydianColors.muted,
+                                      height: 1.5,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ),
-                            const SizedBox(height: 10),
-                            Text('下单时间：${_order['created_at'] ?? '--'}'),
-                            Text(
-                              '收货人：${_order['receiver_name'] ?? _order['realname'] ?? '--'}',
-                            ),
-                            Text(
-                              '联系电话：${_order['receiver_mobile'] ?? _order['mobile'] ?? '--'}',
-                            ),
-                            Text(
-                              '收货地址：${_order['receiver_address'] ?? _order['address'] ?? '--'}',
                             ),
                           ],
                         ),
                       ),
                     ),
-                    for (final product in products.whereType<Map>())
-                      Card(
-                        child: ListTile(
-                          title: Text('${product['product_name'] ?? '商品'}'),
-                          subtitle: Text('${product['sku_name'] ?? ''}'),
-                          trailing: Text('× ${product['num'] ?? 1}'),
-                        ),
-                      ),
+                    const SizedBox(height: 12),
                     Card(
-                      child: ListTile(
-                        title: const Text('实付款'),
-                        trailing: Text(
-                          '¥${_order['pay_money'] ?? '--'}',
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w900,
-                          ),
+                      child: Column(
+                        children: [
+                          for (var index = 0; index < products.length; index++)
+                            if (products[index] is Map) ...[
+                              Padding(
+                                padding: const EdgeInsets.all(14),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    _OrderProductImage(
+                                      product: products[index] as Map,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            '${(products[index] as Map)['product_name'] ?? '商品'}',
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            '${(products[index] as Map)['sku_name'] ?? ''}',
+                                            style: const TextStyle(
+                                              color: SaydianColors.muted,
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 10),
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: Text(
+                                                  '¥${(products[index] as Map)['product_money'] ?? (products[index] as Map)['price'] ?? '--'}',
+                                                  style: const TextStyle(
+                                                    color:
+                                                        SaydianColors.brandRed,
+                                                    fontWeight: FontWeight.w900,
+                                                  ),
+                                                ),
+                                              ),
+                                              Text(
+                                                '×${(products[index] as Map)['num'] ?? 1}',
+                                                style: const TextStyle(
+                                                  color: SaydianColors.muted,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (index != products.length - 1)
+                                const Divider(height: 1, indent: 104),
+                            ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          children: [
+                            _OrderAmountRow(
+                              label: '商品金额',
+                              value: '¥${_order['order_money'] ?? '--'}',
+                            ),
+                            const SizedBox(height: 10),
+                            const Divider(height: 1),
+                            const SizedBox(height: 12),
+                            _OrderAmountRow(
+                              label: '实付款',
+                              value: '¥${_order['pay_money'] ?? '--'}',
+                              emphasized: true,
+                            ),
+                          ],
                         ),
                       ),
                     ),
-                    if (status == 0)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: FilledButton(
+                    const SizedBox(height: 12),
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          children: [
+                            _OrderInfoRow(label: '订单编号', value: orderNumber),
+                            const SizedBox(height: 10),
+                            _OrderInfoRow(
+                              label: '下单时间',
+                              value: '${_order['created_at'] ?? '--'}',
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        if (status != null && status > 0)
+                          OutlinedButton.icon(
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                settings: const RouteSettings(
+                                  name: 'after-sales',
+                                ),
+                                builder: (_) =>
+                                    AfterSalesPage(orderNumber: orderNumber),
+                              ),
+                            ),
+                            icon: const Icon(Icons.support_agent_outlined),
+                            label: const Text('申请售后'),
+                          ),
+                        if (status != null && status >= 2)
+                          OutlinedButton.icon(
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => ShopExpressPage(
+                                  controller: widget.controller,
+                                  orderId: widget.id,
+                                ),
+                              ),
+                            ),
+                            icon: const Icon(Icons.local_shipping_outlined),
+                            label: const Text('查看物流'),
+                          ),
+                        if (status == 0)
+                          FilledButton.icon(
                             onPressed: () => Navigator.of(context).push(
                               MaterialPageRoute<void>(
                                 builder: (_) => ShopPaymentStatusPage(
@@ -5865,57 +6261,81 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                                 ),
                               ),
                             ),
-                            child: const Text('查看支付状态'),
+                            icon: const Icon(Icons.payment_rounded),
+                            label: const Text('查看支付状态'),
                           ),
-                        ),
-                      ),
-                    if (status != null && status >= 2)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: () => Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => ShopExpressPage(
-                                  controller: widget.controller,
-                                  orderId: widget.id,
-                                ),
-                              ),
-                            ),
-                            icon: const Icon(Icons.local_shipping_outlined),
-                            label: const Text('查看物流'),
-                          ),
-                        ),
-                      ),
-                    if (status != null && status > 0)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: TextButton.icon(
-                            onPressed: () => Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                settings: const RouteSettings(
-                                  name: 'after-sales',
-                                ),
-                                builder: (_) => AfterSalesPage(
-                                  orderNumber:
-                                      '${_order['order_sn'] ?? widget.id}',
-                                ),
-                              ),
-                            ),
-                            icon: const Icon(Icons.support_agent_outlined),
-                            label: const Text('申请售后'),
-                          ),
-                        ),
-                      ),
+                      ],
+                    ),
                   ],
                 ],
               ),
             ),
     );
   }
+
+  String _orderStatusLabel(int? status) => switch (status) {
+    0 => '等待付款',
+    1 => '等待发货',
+    2 => '等待收货',
+    3 => '等待评价',
+    4 => '交易完成',
+    _ => '${_order['order_status_name'] ?? '订单处理中'}',
+  };
+
+  String _orderStatusDescription(int? status) => switch (status) {
+    0 => '请在订单有效期内完成支付',
+    1 => '商家正在准备您的商品',
+    2 => '商品已发出，请注意查收',
+    3 => '期待您分享本次购物体验',
+    4 => '感谢您使用赛电商城',
+    _ => '订单状态以商城最新数据为准',
+  };
+}
+
+class _OrderAmountRow extends StatelessWidget {
+  const _OrderAmountRow({
+    required this.label,
+    required this.value,
+    this.emphasized = false,
+  });
+
+  final String label;
+  final String value;
+  final bool emphasized;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Expanded(child: Text(label)),
+      Text(
+        value,
+        style: TextStyle(
+          color: emphasized ? SaydianColors.brandRed : SaydianColors.ink,
+          fontSize: emphasized ? 19 : 15,
+          fontWeight: emphasized ? FontWeight.w900 : FontWeight.w700,
+        ),
+      ),
+    ],
+  );
+}
+
+class _OrderInfoRow extends StatelessWidget {
+  const _OrderInfoRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      SizedBox(
+        width: 78,
+        child: Text(label, style: const TextStyle(color: SaydianColors.muted)),
+      ),
+      Expanded(child: SelectableText(value)),
+    ],
+  );
 }
 
 class UnitSettingsPage extends StatefulWidget {

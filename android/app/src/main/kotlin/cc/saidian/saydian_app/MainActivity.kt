@@ -482,6 +482,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     private var personSyncTimeoutTask: Runnable? = null
     @Volatile private var healthSyncGeneration = 0
     @Volatile private var activeHealthSyncCallback: ResultCallback<List<Map<String, Any?>>>? = null
+    @Volatile private var activeHealthSyncRecords: MutableList<Map<String, Any?>>? = null
     @Volatile private var jlWatchFaceSessionActive = false
     private val availableWatchFacePaths = linkedSetOf<String>()
     private var activeHealthSyncDeviceId = ""
@@ -493,11 +494,15 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     private var connectedDeviceId = ""
     private var connectedDeviceName = ""
     private var firmwareVersion = ""
+    private var watchFaceDeviceNumber = 0
+    private var watchFaceDeviceTestVersion = ""
     private var watchDataDays = 3
     private var capabilities = defaultCapabilities()
     private var activeMetric: String? = null
     private var measurementResultTimeoutTask: Runnable? = null
     private var ecgSampleFrequency = DEFAULT_ECG_SAMPLE_FREQUENCY
+    private var latestEcgHeartRate = 0
+    private var latestEcgHrv = 0
     private var activeHrvUsesEcg = false
     private var temperatureRetryUsed = false
     private var bloodPressureStartGeneration = 0
@@ -530,7 +535,10 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         // initialization so scan, connect and protocol operations share state.
         VPOperateManager.getInstance().init(appContext)
         manager = VPOperateManager.getInstance()
-        manager.setAutoConnectBTBySdk(false)
+        // Keep the watch's BLE data link and the phone Bluetooth/audio link in
+        // sync. The vendor SDK only establishes the latter automatically when
+        // this switch is enabled.
+        manager.setAutoConnectBTBySdk(true)
         manager.setCameraListener(cameraListener)
         manager.listenDeviceCallbackData(
             object : IBleNotifyResponse() {
@@ -866,6 +874,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                             ?.trim()
                             ?.takeIf(String::isNotEmpty)
                             ?.let { firmwareVersion = it }
+                        watchFaceDeviceNumber = data.deviceNumber
+                        watchFaceDeviceTestVersion = data.deviceTestVersion?.trim().orEmpty()
                         Log.i(
                             LOG_TAG,
                             "Password state=${data.getmStatus()} firmwarePresent=${firmwareVersion.isNotBlank()}",
@@ -1186,6 +1196,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 "brightness" to 1,
                 "maximumBrightness" to 1,
                 "automaticBrightness" to false,
+                "brightnessSupported" to preferences.isSupportScreenlight,
                 "raiseToWakeSupported" to preferences.isSupportNightturnSetting,
             )
 
@@ -1264,8 +1275,16 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                     return@IScreenLightListener
                 }
                 lastScreenSetting = setting
-                values["brightness"] = setting.otherLeverl
-                values["maximumBrightness"] = setting.maxLevel.coerceAtLeast(1)
+                // Older W9S firmware omits maxLevel (returns 0) even though
+                // ScreenSetting and the protocol use four brightness levels.
+                // Keep the SDK default instead of collapsing the UI to 1/1.
+                val maximum = setting.maxLevel.takeIf { it >= 2 } ?: 4
+                val brightness =
+                    setting.otherLeverl.takeIf { it in 1..maximum }
+                        ?: setting.level.takeIf { it in 1..maximum }
+                        ?: 1
+                values["brightness"] = brightness
+                values["maximumBrightness"] = maximum
                 values["automaticBrightness"] = setting.auto == 1
                 finishBrightness(true)
             },
@@ -1420,6 +1439,11 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                                         mapOf(
                                             "items" to items,
                                             "hasPhotoWatchFace" to false,
+                                            "deviceNumber" to watchFaceDeviceNumber,
+                                            "deviceTestVersion" to watchFaceDeviceTestVersion,
+                                            "dialShape" to 56,
+                                            "screenWidth" to 240,
+                                            "screenHeight" to 296,
                                         ),
                                     )
                                 }
@@ -1522,6 +1546,11 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                                         mapOf(
                                             "items" to items,
                                             "hasPhotoWatchFace" to (picFatFile != null),
+                                            "deviceNumber" to watchFaceDeviceNumber,
+                                            "deviceTestVersion" to watchFaceDeviceTestVersion,
+                                            "dialShape" to 56,
+                                            "screenWidth" to 240,
+                                            "screenHeight" to 296,
                                         ),
                                     )
                                 }
@@ -1773,6 +1802,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         callback: ResultCallback<Unit>,
     ) {
         val path = values?.get("filePath")?.toString().orEmpty()
+        val expectedWidth = (values?.get("screenWidth") as? Number)?.toInt() ?: 0
+        val expectedHeight = (values?.get("screenHeight") as? Number)?.toInt() ?: 0
         val file = java.io.File(path)
         if (!file.isFile || file.length() <= 100 || file.length() > 614_733L) {
             callback.error("INVALID_ARGUMENT", "表盘文件无效，请重新下载")
@@ -1792,8 +1823,9 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             else callback.error("TRANSFER_FAILED", message ?: "表盘设置失败，请稍后重试")
         }
         connectionHandler.postDelayed(timeout, WATCH_FACE_UPLOAD_TIMEOUT_MS)
-        prepareJLWatchFaceSession(
-            onReady = {
+        val startTransfer = {
+            prepareJLWatchFaceSession(
+                onReady = {
                 JLWatchHolder.getInstance().updateJLWatchServerDial(
                     file.absolutePath,
                     object : JLWatchHolder.OnSetJLWatchDialListener {
@@ -1821,8 +1853,34 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                         }
                     },
                 )
+                },
+                onError = { _, message -> finish(false, message) },
+            )
+        }
+        if (expectedWidth <= 0 || expectedHeight <= 0) {
+            startTransfer()
+            return
+        }
+        manager.readWatchUiInfo(
+            IBleWriteResponse { code ->
+                if (code != Code.REQUEST_SUCCESS) {
+                    connectionHandler.post { finish(false, "无法读取手表屏幕规格，请重新连接后重试") }
+                }
             },
-            onError = { _, message -> finish(false, message) },
+            EUIFromType.CUSTOM,
+            object : IUIBaseInfoListener<UIDataCustom> {
+                override fun onBaseUiInfo(data: UIDataCustom) {
+                    val ui = WatchUIType.getInstance(data.customUIType)
+                    if (ui.bigBitmapWidth != expectedWidth || ui.bigBitmapHeight != expectedHeight) {
+                        finish(
+                            false,
+                            "该表盘为 ${expectedWidth}×${expectedHeight}，与当前手表 ${ui.bigBitmapWidth}×${ui.bigBitmapHeight} 不匹配",
+                        )
+                    } else {
+                        startTransfer()
+                    }
+                }
+            },
         )
     }
 
@@ -2186,7 +2244,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             callback.error("READ_REQUIRED", "请先刷新屏幕设置后再保存")
             return
         }
-        val maximum = setting.maxLevel.coerceAtLeast(1)
+        val maximum = setting.maxLevel.takeIf { it >= 2 } ?: 4
         val level = (values?.get("brightness") as? Number)?.toInt()?.coerceIn(1, maximum) ?: 1
         setting.otherLeverl = level
         setting.level = level
@@ -3492,6 +3550,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     fun readSportRecords(callback: ResultCallback<List<Map<String, Any?>>>) {
         ensureConnected(callback) ?: return
         val records = mutableListOf<Map<String, Any?>>()
+        synchronized(this) { activeHealthSyncRecords = records }
         manager.readSportModelOrigin(
             writeResponse(callback, "运动记录暂时无法读取"),
             object : ISportModelOriginListener {
@@ -4148,6 +4207,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 } else {
                     activeHealthSyncCallback = null
                     activeHealthSyncDeviceId = ""
+                    activeHealthSyncRecords = null
                     true
                 }
             }
@@ -4165,7 +4225,20 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         code: String,
         message: String,
     ) {
+        val partialRecords =
+            synchronized(this) {
+                activeHealthSyncRecords?.toList().orEmpty()
+            }.distinctBy { it["id"] }
         if (!finishHealthSync(generation, callback, deviceId)) return
+        if (partialRecords.isNotEmpty()) {
+            Log.w(LOG_TAG, "health sync returned ${partialRecords.size} partial records after $code")
+            emit(
+                "syncProgress",
+                mapOf("deviceId" to deviceId, "progress" to 1.0, "partial" to true),
+            )
+            callback.success(partialRecords)
+            return
+        }
         emit("error", mapOf("code" to code, "message" to message, "deviceId" to deviceId))
         callback.error(code, message)
     }
@@ -4180,6 +4253,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 val current = activeHealthSyncCallback
                 activeHealthSyncCallback = null
                 activeHealthSyncDeviceId = ""
+                activeHealthSyncRecords = null
                 healthSyncGeneration += 1
                 current
             }
@@ -4221,6 +4295,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 "ecg" -> {
                     activeEcgSamples.clear()
                     ecgSampleFrequency = DEFAULT_ECG_SAMPLE_FREQUENCY
+                    latestEcgHeartRate = 0
+                    latestEcgHrv = 0
                     manager.startDetectECG(measurementWrite(callback), true, ecgListener)
                 }
                 "hrv" -> {
@@ -4233,6 +4309,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                         // an otherwise measurable HRV entry.
                         activeEcgSamples.clear()
                         ecgSampleFrequency = DEFAULT_ECG_SAMPLE_FREQUENCY
+                        latestEcgHeartRate = 0
+                        latestEcgHrv = 0
                         activeHrvUsesEcg = true
                         manager.startDetectECG(measurementWrite(callback), true, ecgListener)
                     } else {
@@ -4996,6 +5074,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
 
             override fun onEcgDetectStateChange(state: EcgDetectState) {
                 val metric = activeMetric ?: return
+                if (state.hr2 in 30..210) latestEcgHeartRate = state.hr2
+                if (state.hrv in 1..250) latestEcgHrv = state.hrv
                 emit(
                     "measurementProgress",
                     mapOf(
@@ -5013,6 +5093,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                         "ECG_NOT_WORN",
                         "请正确佩戴手表，并将手指持续贴在心电电极上",
                     )
+                } else if (state.progress >= 100) {
+                    deferEcgCompletion(metric)
                 }
             }
 
@@ -5026,8 +5108,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                     return
                 }
                 val values = buildMap<String, Number> {
-                    if (result.aveHeart > 0) put("meanHeartRate", result.aveHeart)
-                    if (result.aveHrv > 0) put("averageHRV", result.aveHrv)
+                    if (result.aveHeart in 30..210) put("meanHeartRate", result.aveHeart)
+                    if (result.aveHrv in 1..250) put("averageHRV", result.aveHrv)
                     if (result.aveQT > 0) put("averageTimeInterval", result.aveQT)
                     if (result.aveResRate > 0) put("respiratoryRate", result.aveResRate)
                     put("sampleFrequency", result.frequency.takeIf { it > 0 } ?: ecgSampleFrequency)
@@ -5037,17 +5119,13 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 val metric = activeMetric ?: "ecg"
                 val resultValues =
                     if (metric == "hrv") {
-                        result.aveHrv.takeIf { it > 0 }?.let { mapOf("value" to it) }.orEmpty()
+                        result.aveHrv.takeIf { it in 1..250 }?.let { mapOf("value" to it) }.orEmpty()
                     } else {
                         values
                     }
-                if (resultValues.isNotEmpty() && claimMeasurementResult(metric)) {
-                    val samples =
-                        result.filterSignals
-                            ?.toList()
-                            .orEmpty()
-                            .ifEmpty { activeEcgSamples }
-                            .filter { it.toLong() != Int.MAX_VALUE.toLong() }
+                val hasUsablePrimary = metric == "hrv" || resultValues.containsKey("meanHeartRate")
+                if (resultValues.isNotEmpty() && hasUsablePrimary && claimMeasurementResult(metric)) {
+                    val samples = selectEcgSamples(result.filterSignals?.toList().orEmpty())
                     emitRecord(
                         record(
                             metric,
@@ -5070,29 +5148,36 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                     return
                 }
                 val values = buildMap<String, Number> {
-                    if (diagnosis.heartRate > 0) put("meanHeartRate", diagnosis.heartRate)
-                    if (diagnosis.hrv > 0) put("averageHRV", diagnosis.hrv)
+                    if (diagnosis.heartRate in 30..210) put("meanHeartRate", diagnosis.heartRate)
+                    if (diagnosis.hrv in 1..250) put("averageHRV", diagnosis.hrv)
                     if (diagnosis.qtTime > 0) put("averageTimeInterval", diagnosis.qtTime)
                     if (diagnosis.respRate > 0) put("respiratoryRate", diagnosis.respRate)
                     if (diagnosis.diseaseRisk > 0) put("diseaseRisk", diagnosis.diseaseRisk)
                     if (diagnosis.pressureIndex > 0) put("pressureIndex", diagnosis.pressureIndex)
                     if (diagnosis.fatigueIndex > 0) put("fatigueIndex", diagnosis.fatigueIndex)
+                    if (diagnosis.myocarditisRisk > 0) put("myocarditisRisk", diagnosis.myocarditisRisk)
+                    if (diagnosis.chdRisk > 0) put("chdRisk", diagnosis.chdRisk)
+                    if (diagnosis.angioscleroticRisk > 0) put("angioscleroticRisk", diagnosis.angioscleroticRisk)
+                    if (diagnosis.qrsTime > 0) put("qrsTime", diagnosis.qrsTime)
+                    if (diagnosis.qrsAmp > 0) put("qrsAmplitude", diagnosis.qrsAmp)
+                    if (diagnosis.pwvMeanVal > 0) put("pulseWaveVelocity", diagnosis.pwvMeanVal)
+                    if (diagnosis.stMeanAmp != 0) put("stAmplitude", diagnosis.stMeanAmp)
+                    if (diagnosis.diseaseSdnn > 0) put("sdnn", diagnosis.diseaseSdnn)
+                    if (diagnosis.diseaseRmssd > 0) put("rmssd", diagnosis.diseaseRmssd)
+                    val abnormalCount = diagnosis.diseaseResult?.count { it != 0 } ?: 0
+                    if (abnormalCount > 0) put("deviceAbnormalFlags", abnormalCount)
                     put("sampleFrequency", diagnosis.frequency.takeIf { it > 0 } ?: ecgSampleFrequency)
                 }
                 val metric = activeMetric ?: "ecg"
                 val resultValues =
                     if (metric == "hrv") {
-                        diagnosis.hrv.takeIf { it > 0 }?.let { mapOf("value" to it) }.orEmpty()
+                        diagnosis.hrv.takeIf { it in 1..250 }?.let { mapOf("value" to it) }.orEmpty()
                     } else {
                         values
                     }
-                if (resultValues.isNotEmpty() && claimMeasurementResult(metric)) {
-                    val samples =
-                        diagnosis.filterSignals
-                            ?.toList()
-                            .orEmpty()
-                            .ifEmpty { activeEcgSamples }
-                            .filter { it.toLong() != Int.MAX_VALUE.toLong() }
+                val hasUsablePrimary = metric == "hrv" || resultValues.containsKey("meanHeartRate")
+                if (resultValues.isNotEmpty() && hasUsablePrimary && claimMeasurementResult(metric)) {
+                    val samples = selectEcgSamples(diagnosis.filterSignals?.toList().orEmpty())
                     emitRecord(
                         record(
                             metric,
@@ -5160,6 +5245,36 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             }
         }
 
+    private fun selectEcgSamples(filteredSamples: List<Number>): List<Number> {
+        val filtered = filteredSamples.filter { it.toLong() != Int.MAX_VALUE.toLong() }
+        val live = activeEcgSamples.filter { it.toLong() != Int.MAX_VALUE.toLong() }
+        val filteredCoverage = ecgSampleChangeRatio(filtered)
+        val liveCoverage = ecgSampleChangeRatio(live)
+        val selected =
+            when {
+                filteredCoverage >= ECG_MIN_SAMPLE_CHANGE_RATIO -> filtered
+                liveCoverage >= ECG_MIN_SAMPLE_CHANGE_RATIO -> live
+                else -> emptyList()
+            }
+        Log.i(
+            LOG_TAG,
+            "ecg samples filtered=${filtered.size}/$filteredCoverage live=${live.size}/$liveCoverage selected=${selected.size}",
+        )
+        return selected
+    }
+
+    private fun ecgSampleChangeRatio(samples: List<Number>): Double {
+        if (samples.size < 2) return 0.0
+        var changedSamples = 0
+        var previous = samples.first().toDouble()
+        for (index in 1 until samples.size) {
+            val current = samples[index].toDouble()
+            if (current != previous) changedSamples += 1
+            previous = current
+        }
+        return changedSamples.toDouble() / (samples.size - 1)
+    }
+
     private fun failMeasurement(
         metric: String,
         code: String,
@@ -5172,19 +5287,51 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     }
 
     private fun deferEcgFailure(metric: String) {
+        deferEcgCompletion(metric)
+    }
+
+    private fun deferEcgCompletion(metric: String) {
         connectionHandler.postDelayed(
             {
                 if (activeMetric == metric) {
-                    val hrv = metric == "hrv"
-                    failMeasurement(
-                        metric,
-                        if (hrv) "HRV_MEASUREMENT_FAILED" else "ECG_MEASUREMENT_FAILED",
-                        if (hrv) {
-                            "HRV 测量未完成，请保持手表贴合并持续接触电极后重试"
+                    val values =
+                        if (metric == "hrv") {
+                            latestEcgHrv.takeIf { it in 1..250 }?.let { mapOf("value" to it) }.orEmpty()
                         } else {
-                            "心电测量未完成，请保持接触电极后重试"
-                        },
-                    )
+                            buildMap<String, Number> {
+                                if (latestEcgHeartRate in 30..210) put("meanHeartRate", latestEcgHeartRate)
+                                if (latestEcgHrv in 1..250) put("averageHRV", latestEcgHrv)
+                                put("sampleFrequency", ecgSampleFrequency)
+                            }
+                        }
+                    val hasUsablePrimary = metric == "hrv" || values.containsKey("meanHeartRate")
+                    if (values.isNotEmpty() &&
+                        hasUsablePrimary &&
+                        claimMeasurementResult(metric)
+                    ) {
+                        val samples =
+                            if (metric == "ecg") selectEcgSamples(emptyList()) else emptyList()
+                        emitRecord(
+                            record(
+                                metric,
+                                values,
+                                if (metric == "hrv") "ms" else "",
+                                Date(),
+                                samples,
+                            ),
+                        )
+                    } else if (activeMetric == metric) {
+                        val hrv = metric == "hrv"
+                        failMeasurement(
+                            metric,
+                            if (hrv) "HRV_MEASUREMENT_FAILED" else "ECG_MEASUREMENT_FAILED",
+                            if (hrv) {
+                                "HRV 测量未完成，请保持手表贴合并持续接触电极后重试"
+                            } else {
+                                "心电测量未完成，请保持接触电极后重试"
+                            },
+                        )
+                    }
                 }
             },
             ECG_RESULT_SETTLE_MS,
@@ -5566,7 +5713,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         private const val MEASUREMENT_START_ACK_TIMEOUT_MS = 1_500L
         private const val MEASUREMENT_STOP_SETTLE_MS = 1_200L
         private const val MEASUREMENT_STOP_CALLBACK_TIMEOUT_MS = 3_000L
-        private const val ECG_RESULT_SETTLE_MS = 2_000L
+        private const val ECG_RESULT_SETTLE_MS = 5_000L
+        private const val ECG_MIN_SAMPLE_CHANGE_RATIO = 0.05
         private const val ALARM_CACHE_FALLBACK_MS = 1_000L
         private const val ALARM_CACHE_SETTLE_MS = 120L
         private const val ALARM_WRITE_VERIFY_DELAY_MS = 1_200L

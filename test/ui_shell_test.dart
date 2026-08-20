@@ -402,7 +402,9 @@ void main() {
       ),
     );
     await tester.pump();
-    await tester.tap(find.byTooltip('手动测量').first);
+    await tester.tap(find.text('心率').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('health-measure-heart_rate')));
     await tester.pump();
     await tester.pump();
     expect(find.text('心率测量'), findsOneWidget);
@@ -745,7 +747,9 @@ void main() {
       ),
     );
     await tester.pump();
-    await tester.tap(find.byTooltip('手动测量').first);
+    await tester.tap(find.text('心率').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('health-measure-heart_rate')));
     await tester.pump();
     wearable.emit(
       const WearableEvent(

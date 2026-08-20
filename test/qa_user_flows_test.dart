@@ -230,7 +230,7 @@ void main() {
         expect(controller.syncStatus, '已同步 1 条');
         expect(controller.cloudSyncStatus, '批量健康同步接口未配置');
         expect(find.text('设备同步：已同步 1 条'), findsOneWidget);
-        expect(find.text('云端同步：批量健康同步接口未配置'), findsOneWidget);
+        expect(find.textContaining('云端同步：'), findsNothing);
       } finally {
         debugDefaultTargetPlatformOverride = null;
       }
@@ -625,6 +625,8 @@ void main() {
         350,
         scrollable: find.byType(Scrollable).first,
       );
+      await tester.drag(find.byType(Scrollable).first, const Offset(0, -120));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('跑步'));
       await tester.pumpAndSettle();
       expect(find.textContaining('请先在设备页连接手表'), findsOneWidget);

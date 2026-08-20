@@ -12,6 +12,18 @@ allprojects {
         google()
         mavenCentral()
     }
+
+    configurations.configureEach {
+        resolutionStrategy {
+            // Flutter's integration_test plugin still declares dynamic
+            // AndroidX test versions. Pin the versions already used by this
+            // project so release builds remain reproducible and do not need
+            // Maven metadata access merely to package the application.
+            force("androidx.test:runner:1.3.0")
+            force("androidx.test:rules:1.2.0")
+            force("androidx.test.espresso:espresso-core:3.3.0")
+        }
+    }
 }
 
 val newBuildDir: Directory =

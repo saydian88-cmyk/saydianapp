@@ -12,11 +12,13 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../domain/feature_models.dart';
+import '../domain/ecg_waveform.dart';
 import '../domain/health_interpretation.dart';
 import '../domain/models.dart';
 import '../services/app_controller.dart';
 import '../services/app_update_service.dart';
 import '../services/device_weather_service.dart';
+import '../services/device_watch_face_market_service.dart';
 import 'app_theme.dart';
 import 'brand_assets.dart';
 import 'device_sdk_badge.dart';
@@ -1376,7 +1378,10 @@ class HealthRecordDetailPage extends StatelessWidget {
           if (record.metric == HealthMetric.ecg &&
               record.samples.length > 1) ...[
             const SizedBox(height: 12),
-            _EcgWaveformCard(samples: record.samples),
+            _EcgWaveformCard(
+              samples: record.samples,
+              sampleFrequency: record.values['sampleFrequency']?.toInt() ?? 250,
+            ),
           ],
           const SizedBox(height: 12),
           Builder(
@@ -1457,6 +1462,8 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
       }
       if (widget.feature == DeviceFeature.screenDisplay) {
         unawaited(_loadScreen());
+      } else if (widget.feature == DeviceFeature.healthMonitoring) {
+        unawaited(widget.controller.refreshDeviceSettings());
       } else if (widget.feature == DeviceFeature.camera) {
         unawaited(_initializeCamera());
       } else if (widget.feature != DeviceFeature.findWatch) {
@@ -1696,6 +1703,7 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
     DeviceFeature.worldClock => _buildWorldClocksPanel(busy),
     DeviceFeature.healthReminders => _buildHealthRemindersPanel(busy),
     DeviceFeature.healthAssessment => _buildHealthAssessmentPanel(busy),
+    DeviceFeature.healthMonitoring => _buildHealthMonitoringPanel(),
     _ => FeatureStateCard(
       message: '此功能暂时无法使用，请稍后再试',
       detail: _deviceFeatureDescription(widget.feature),
@@ -1750,6 +1758,9 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
                     MaterialPageRoute<void>(
                       builder: (_) => DeviceWatchFaceMarketPage(
                         controller: widget.controller,
+                        profile: DeviceWatchFaceMarketProfile.fromMap(
+                          _featureData,
+                        ),
                       ),
                     ),
                   ),
@@ -2525,8 +2536,41 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
   Widget _buildContactsPanel(bool busy) {
     if (_featureData.isEmpty) return _loadingCard(busy, '联系人');
     final contacts = _items;
+    Map<String, Object?>? emergency;
+    for (final contact in contacts) {
+      if (contact['isEmergency'] == true) {
+        emergency = contact;
+        break;
+      }
+    }
     return Column(
       children: [
+        Card(
+          color: SaydianColors.brandRedSoft,
+          child: ListTile(
+            leading: const CircleAvatar(
+              backgroundColor: SaydianColors.brandRed,
+              foregroundColor: Colors.white,
+              child: Icon(Icons.sos_rounded),
+            ),
+            title: const Text(
+              'SOS 紧急联系人',
+              style: TextStyle(fontWeight: FontWeight.w900),
+            ),
+            subtitle: Text(
+              emergency == null
+                  ? '尚未设置，手表触发 SOS 时将无法快速联系家人'
+                  : '${emergency['name'] ?? ''}  ${emergency['phone'] ?? ''}',
+            ),
+            trailing: TextButton(
+              onPressed: busy || contacts.isEmpty
+                  ? null
+                  : () => _selectEmergencyContact(contacts),
+              child: Text(emergency == null ? '立即设置' : '更换'),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
         Card(
           child: contacts.isEmpty
               ? const Padding(
@@ -2620,6 +2664,48 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
       'operation': 'emergency',
       'isEmergency': enabled,
     }, enabled ? '已设为紧急联系人' : '已取消紧急联系人');
+  }
+
+  Future<void> _selectEmergencyContact(
+    List<Map<String, Object?>> contacts,
+  ) async {
+    final supported = contacts
+        .where((contact) => contact['supportsEmergency'] == true)
+        .toList(growable: false);
+    if (supported.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('当前手表联系人协议不支持 SOS 设置')));
+      return;
+    }
+    final selected = await showDialog<Map<String, Object?>>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('选择 SOS 紧急联系人'),
+        children: [
+          for (final contact in supported)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(dialogContext, contact),
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  contact['isEmergency'] == true
+                      ? Icons.star_rounded
+                      : Icons.person_outline_rounded,
+                  color: contact['isEmergency'] == true
+                      ? SaydianColors.orange
+                      : null,
+                ),
+                title: Text('${contact['name'] ?? ''}'),
+                subtitle: Text('${contact['phone'] ?? ''}'),
+              ),
+            ),
+        ],
+      ),
+    );
+    if (selected != null && selected['isEmergency'] != true) {
+      await _toggleEmergencyContact(selected);
+    }
   }
 
   String _contactInitial(Map<String, Object?> contact) {
@@ -2914,6 +3000,80 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
     );
   }
 
+  Widget _buildHealthMonitoringPanel() {
+    final settings = widget.controller.autoMeasureSettings;
+    final warningSupported = widget.controller.heartRateWarningSupported;
+    if (settings.isEmpty && !warningSupported) {
+      return FeatureStateCard(
+        message: widget.controller.deviceSettingsStatus,
+        detail: '读取结果以当前连接手表实际支持的自动检测项目为准。',
+        icon: Icons.monitor_heart_outlined,
+        actionLabel: '重新读取',
+        onAction: widget.controller.refreshDeviceSettings,
+      );
+    }
+    const labels = <String, String>{
+      'heartRate': '心率自动检测',
+      'bloodPressure': '血压自动检测',
+      'bloodGlucose': '血糖自动检测',
+      'bodyTemperature': '体温自动检测',
+    };
+    final entries = settings.entries.toList(growable: false);
+    return Column(
+      children: [
+        Card(
+          child: Column(
+            children: [
+              for (var index = 0; index < entries.length; index++) ...[
+                SwitchListTile(
+                  secondary: const Icon(Icons.sensors_rounded),
+                  title: Text(labels[entries[index].key] ?? entries[index].key),
+                  subtitle: const Text('开启后由手表按设备设定周期自动检测'),
+                  value: entries[index].value,
+                  onChanged: (enabled) => widget.controller
+                      .setAutoMeasureSetting(entries[index].key, enabled),
+                ),
+                if (index != entries.length - 1)
+                  const Divider(height: 1, indent: 56),
+              ],
+            ],
+          ),
+        ),
+        if (warningSupported) ...[
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: const Icon(
+                Icons.warning_amber_rounded,
+                color: SaydianColors.orange,
+              ),
+              title: const Text('手表心率预警'),
+              subtitle: const Text('持续超过阈值时由手表提醒'),
+              trailing: DropdownButton<int>(
+                value: widget.controller.heartRateWarning,
+                items: [
+                  for (var value = 70; value <= 185; value += 5)
+                    DropdownMenuItem(value: value, child: Text('$value bpm')),
+                ],
+                onChanged: (value) {
+                  if (value != null) {
+                    widget.controller.setHeartRateWarning(value);
+                  }
+                },
+              ),
+            ),
+          ),
+        ],
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: widget.controller.refreshDeviceSettings,
+          icon: const Icon(Icons.refresh_rounded),
+          label: Text(widget.controller.deviceSettingsStatus),
+        ),
+      ],
+    );
+  }
+
   String _minutesLabel(int value) =>
       '${(value ~/ 60).toString().padLeft(2, '0')}:${(value % 60).toString().padLeft(2, '0')}';
 
@@ -3163,18 +3323,24 @@ class _DeviceFeatureHeader extends StatelessWidget {
 }
 
 class _EcgWaveformCard extends StatelessWidget {
-  const _EcgWaveformCard({required this.samples});
+  const _EcgWaveformCard({
+    required this.samples,
+    required this.sampleFrequency,
+  });
 
   final List<num> samples;
+  final int sampleFrequency;
 
   @override
   Widget build(BuildContext context) {
-    final stride = math.max(1, (samples.length / 800).ceil());
-    final visible = <num>[
-      for (var index = 0; index < samples.length; index += stride)
-        samples[index],
-    ];
-    final spots = visible
+    final frequency = sampleFrequency.clamp(50, 1000);
+    final durationSeconds = samples.length / frequency;
+    final chartWidth = math.max(640.0, durationSeconds * 72.0);
+    final waveform = prepareEcgDisplayWaveform(
+      samples,
+      maximumPoints: math.max(2, (chartWidth * 2).round()),
+    );
+    final spots = waveform.samples
         .asMap()
         .entries
         .map((entry) => FlSpot(entry.key.toDouble(), entry.value.toDouble()))
@@ -3186,38 +3352,56 @@ class _EcgWaveformCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text('心电波形', style: TextStyle(fontWeight: FontWeight.w800)),
-            const SizedBox(height: 12),
-            Semantics(
-              label: '设备记录的心电波形，共${samples.length}个采样点',
-              child: SizedBox(
-                height: 180,
-                child: LineChart(
-                  LineChartData(
-                    gridData: FlGridData(
-                      getDrawingHorizontalLine: (_) => FlLine(
-                        color: SaydianColors.pink.withValues(alpha: 0.12),
-                        strokeWidth: 1,
-                      ),
-                      getDrawingVerticalLine: (_) => FlLine(
-                        color: SaydianColors.pink.withValues(alpha: 0.08),
-                        strokeWidth: 1,
+            const SizedBox(height: 4),
+            Text(
+              '共 ${durationSeconds.toStringAsFixed(1)} 秒 · 左右滑动查看完整记录',
+              style: const TextStyle(color: SaydianColors.muted, fontSize: 13),
+            ),
+            const SizedBox(height: 10),
+            if (!waveform.hasVariation)
+              const FeatureStateCard(
+                message: '本次未返回有效心电波形',
+                detail: '心率和 HRV 等结果仍可查看；下次测量时请持续接触手表电极。',
+                icon: Icons.monitor_heart_outlined,
+              )
+            else
+              Semantics(
+                label: '设备记录的完整心电波形，共${samples.length}个采样点',
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: SizedBox(
+                    width: chartWidth,
+                    height: 180,
+                    child: LineChart(
+                      LineChartData(
+                        minY: waveform.minimum,
+                        maxY: waveform.maximum,
+                        gridData: FlGridData(
+                          getDrawingHorizontalLine: (_) => FlLine(
+                            color: SaydianColors.pink.withValues(alpha: 0.12),
+                            strokeWidth: 1,
+                          ),
+                          getDrawingVerticalLine: (_) => FlLine(
+                            color: SaydianColors.pink.withValues(alpha: 0.08),
+                            strokeWidth: 1,
+                          ),
+                        ),
+                        borderData: FlBorderData(show: false),
+                        titlesData: const FlTitlesData(show: false),
+                        lineTouchData: const LineTouchData(enabled: false),
+                        lineBarsData: [
+                          LineChartBarData(
+                            spots: spots,
+                            color: SaydianColors.pink,
+                            barWidth: 1.8,
+                            dotData: const FlDotData(show: false),
+                          ),
+                        ],
                       ),
                     ),
-                    borderData: FlBorderData(show: false),
-                    titlesData: const FlTitlesData(show: false),
-                    lineTouchData: const LineTouchData(enabled: false),
-                    lineBarsData: [
-                      LineChartBarData(
-                        spots: spots,
-                        color: SaydianColors.pink,
-                        barWidth: 1.8,
-                        dotData: const FlDotData(show: false),
-                      ),
-                    ],
                   ),
                 ),
               ),
-            ),
           ],
         ),
       ),
@@ -3306,29 +3490,58 @@ class _ScreenSettingsPanel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('自动调节亮度'),
-              subtitle: const Text('由手表根据时间自动调节'),
-              value: value.automaticBrightness,
-              onChanged: busy
-                  ? null
-                  : (enabled) =>
-                        onChanged(value.copyWith(automaticBrightness: enabled)),
-            ),
-            const Divider(),
-            const SizedBox(height: 12),
-            Text('屏幕亮度  $current / $maximum'),
-            Slider(
-              value: current.toDouble(),
-              min: 1,
-              max: maximum.toDouble(),
-              divisions: maximum > 1 ? maximum - 1 : 1,
-              onChanged: busy || value.automaticBrightness
-                  ? null
-                  : (next) =>
-                        onChanged(value.copyWith(brightness: next.round())),
-            ),
+            if (value.brightnessSupported) ...[
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('自动调节亮度'),
+                subtitle: const Text('由手表根据时间自动调节'),
+                value: value.automaticBrightness,
+                onChanged: busy
+                    ? null
+                    : (enabled) => onChanged(
+                        value.copyWith(automaticBrightness: enabled),
+                      ),
+              ),
+              const Divider(),
+              const SizedBox(height: 12),
+              Text('屏幕亮度  $current / $maximum'),
+              Slider(
+                value: current.toDouble(),
+                min: 1,
+                max: maximum.toDouble(),
+                divisions: maximum > 1 ? maximum - 1 : 1,
+                onChanged: busy
+                    ? null
+                    : (next) => onChanged(
+                        value.copyWith(
+                          brightness: next.round(),
+                          automaticBrightness: false,
+                        ),
+                      ),
+              ),
+            ] else ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: SaydianColors.brandGoldSoft,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.info_outline_rounded, size: 22),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '当前手表固件未开放 APP 亮度调节，请在手表的屏幕设置中调整亮度。',
+                        style: TextStyle(fontSize: 14, height: 1.45),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             if (value.durationSeconds != null &&
                 value.minimumDurationSeconds != null &&
                 value.maximumDurationSeconds != null) ...[

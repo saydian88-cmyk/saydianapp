@@ -63,6 +63,53 @@ class DeviceWatchFaceMarketPageData {
   final List<DeviceWatchFaceMarketItem> items;
 }
 
+class DeviceWatchFaceMarketProfile {
+  const DeviceWatchFaceMarketProfile({
+    required this.dialShape,
+    required this.binProtocol,
+    required this.maxLength,
+    required this.deviceNumber,
+    required this.deviceTestVersion,
+    required this.screenWidth,
+    required this.screenHeight,
+  });
+
+  factory DeviceWatchFaceMarketProfile.fromMap(Map<String, Object?> value) {
+    int number(String key, int fallback) =>
+        (value[key] as num?)?.toInt() ??
+        int.tryParse('${value[key] ?? ''}') ??
+        fallback;
+    final testVersion = '${value['deviceTestVersion'] ?? ''}'.trim();
+    return DeviceWatchFaceMarketProfile(
+      dialShape: number('dialShape', 56),
+      binProtocol: number('binProtocol', 2),
+      maxLength: number('maxLength', 614733),
+      deviceNumber: number('deviceNumber', 6702),
+      deviceTestVersion: testVersion.isEmpty ? '11.95.01.00' : testVersion,
+      screenWidth: number('screenWidth', 240),
+      screenHeight: number('screenHeight', 296),
+    );
+  }
+
+  static const w9s = DeviceWatchFaceMarketProfile(
+    dialShape: 56,
+    binProtocol: 2,
+    maxLength: 614733,
+    deviceNumber: 6702,
+    deviceTestVersion: '11.95.01.00',
+    screenWidth: 240,
+    screenHeight: 296,
+  );
+
+  final int dialShape;
+  final int binProtocol;
+  final int maxLength;
+  final int deviceNumber;
+  final String deviceTestVersion;
+  final int screenWidth;
+  final int screenHeight;
+}
+
 /// Loads the W9S online watch-face catalogue used by the supplied mini-program.
 ///
 /// The values below are the device profile passed by the original
@@ -78,15 +125,18 @@ class DeviceWatchFaceMarketService {
       'https://www.vphband.com:9001/api/system/getthemespage';
   static const _pageSize = 12;
 
-  Future<DeviceWatchFaceMarketPageData> loadPage({int page = 1}) async {
+  Future<DeviceWatchFaceMarketPageData> loadPage({
+    int page = 1,
+    DeviceWatchFaceMarketProfile profile = DeviceWatchFaceMarketProfile.w9s,
+  }) async {
     final uri = Uri.parse(_endpoint).replace(
       queryParameters: {
-        'dialShape': '56',
-        'binProtocol': '2',
-        'maxLength': '614733',
-        'deviceNumber': '6702',
-        'deviceVersion': '11.95.01.00',
-        'appType': 'ios',
+        'dialShape': '${profile.dialShape}',
+        'binProtocol': '${profile.binProtocol}',
+        'maxLength': '${profile.maxLength}',
+        'deviceNumber': '${profile.deviceNumber}',
+        'deviceVersion': profile.deviceTestVersion,
+        'appType': 'android',
         'appVersion': '1.28.7',
         'pageIndex': '${page < 1 ? 1 : page}',
         'pageSize': '$_pageSize',

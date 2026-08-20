@@ -59,6 +59,7 @@ class DeviceScreenSettings {
     required this.brightness,
     required this.maximumBrightness,
     required this.automaticBrightness,
+    this.brightnessSupported = true,
     this.durationSeconds,
     this.minimumDurationSeconds,
     this.maximumDurationSeconds,
@@ -73,6 +74,7 @@ class DeviceScreenSettings {
   final int brightness;
   final int maximumBrightness;
   final bool automaticBrightness;
+  final bool brightnessSupported;
   final int? durationSeconds;
   final int? minimumDurationSeconds;
   final int? maximumDurationSeconds;
@@ -84,10 +86,14 @@ class DeviceScreenSettings {
   final int raiseToWakeSensitivity;
 
   factory DeviceScreenSettings.fromMap(Map<Object?, Object?> map) {
+    final maximumBrightness = (map['maximumBrightness'] as num?)?.toInt() ?? 1;
     return DeviceScreenSettings(
       brightness: (map['brightness'] as num?)?.toInt() ?? 1,
-      maximumBrightness: (map['maximumBrightness'] as num?)?.toInt() ?? 1,
+      maximumBrightness: maximumBrightness,
       automaticBrightness: map['automaticBrightness'] == true,
+      brightnessSupported: map.containsKey('brightnessSupported')
+          ? map['brightnessSupported'] == true
+          : maximumBrightness > 1,
       durationSeconds: (map['durationSeconds'] as num?)?.toInt(),
       minimumDurationSeconds: (map['minimumDurationSeconds'] as num?)?.toInt(),
       maximumDurationSeconds: (map['maximumDurationSeconds'] as num?)?.toInt(),
@@ -108,6 +114,7 @@ class DeviceScreenSettings {
     'brightness': brightness,
     'maximumBrightness': maximumBrightness,
     'automaticBrightness': automaticBrightness,
+    'brightnessSupported': brightnessSupported,
     'durationSeconds': durationSeconds,
     'raiseToWakeEnabled': raiseToWakeEnabled,
     'raiseToWakeStartMinutes': raiseToWakeStartMinutes,
@@ -119,6 +126,7 @@ class DeviceScreenSettings {
     int? brightness,
     int? maximumBrightness,
     bool? automaticBrightness,
+    bool? brightnessSupported,
     int? durationSeconds,
     int? minimumDurationSeconds,
     int? maximumDurationSeconds,
@@ -132,6 +140,7 @@ class DeviceScreenSettings {
     brightness: brightness ?? this.brightness,
     maximumBrightness: maximumBrightness ?? this.maximumBrightness,
     automaticBrightness: automaticBrightness ?? this.automaticBrightness,
+    brightnessSupported: brightnessSupported ?? this.brightnessSupported,
     durationSeconds: durationSeconds ?? this.durationSeconds,
     minimumDurationSeconds:
         minimumDurationSeconds ?? this.minimumDurationSeconds,

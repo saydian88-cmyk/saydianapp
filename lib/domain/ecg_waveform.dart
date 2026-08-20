@@ -1,0 +1,138 @@
+import 'dart:math' as math;
+
+/// ECG samples prepared for display without inventing waveform data.
+///
+/// The SDK can return a long, high-frequency series containing occasional
+/// transport spikes. A fixed-stride sample can repeatedly hit the same phase
+/// of a periodic signal and make a valid waveform look flat. This helper uses
+/// ordered min/max buckets so short QRS peaks survive downsampling, while
+/// robust display bounds keep isolated transport spikes from flattening the
+/// rest of the chart.
+class EcgDisplayWaveform {
+  const EcgDisplayWaveform({
+    required this.samples,
+    required this.minimum,
+    required this.maximum,
+    required this.hasVariation,
+  });
+
+  final List<double> samples;
+  final double minimum;
+  final double maximum;
+
+  final bool hasVariation;
+}
+
+EcgDisplayWaveform prepareEcgDisplayWaveform(
+  Iterable<num> source, {
+  required int maximumPoints,
+}) {
+  final values = source
+      .where((value) => value.isFinite && value.toInt() != 0x7fffffff)
+      .map((value) => value.toDouble())
+      .toList(growable: false);
+  if (values.isEmpty) {
+    return const EcgDisplayWaveform(
+      samples: [],
+      minimum: 0,
+      maximum: 0,
+      hasVariation: false,
+    );
+  }
+
+  final sorted = [...values]..sort();
+  final lower = _percentile(sorted, 0.005);
+  final upper = _percentile(sorted, 0.995);
+  final rawMinimum = sorted.first;
+  final rawMaximum = sorted.last;
+  final robustMinimum = upper > lower ? lower : rawMinimum;
+  final robustMaximum = upper > lower ? upper : rawMaximum;
+  final clipped = values
+      .map((value) => value.clamp(robustMinimum, robustMaximum).toDouble())
+      .toList(growable: false);
+
+  final target = math.max(2, maximumPoints);
+  final display = clipped.length <= target
+      ? clipped
+      : _orderedMinMaxBuckets(clipped, target);
+  final minimum = display.reduce(math.min);
+  final maximum = display.reduce(math.max);
+  return EcgDisplayWaveform(
+    samples: display,
+    minimum: minimum,
+    maximum: maximum,
+    hasVariation: _hasRepeatedVariation(clipped),
+  );
+}
+
+bool _hasRepeatedVariation(List<double> values) {
+  if (values.length < 2) return false;
+  if (values.length < 16) {
+    return values.reduce(math.max) != values.reduce(math.min);
+  }
+  final windowSize = math.max(8, (values.length / 20).ceil());
+  var windows = 0;
+  var varyingWindows = 0;
+  var changedSamples = 0;
+  for (var index = 1; index < values.length; index++) {
+    if (values[index] != values[index - 1]) changedSamples++;
+  }
+  for (var start = 0; start < values.length; start += windowSize) {
+    final end = math.min(values.length, start + windowSize);
+    var minimum = values[start];
+    var maximum = values[start];
+    for (var index = start + 1; index < end; index++) {
+      minimum = math.min(minimum, values[index]);
+      maximum = math.max(maximum, values[index]);
+    }
+    windows++;
+    if (maximum != minimum) varyingWindows++;
+  }
+  final changeRatio = changedSamples / (values.length - 1);
+  return varyingWindows >= math.max(2, (windows * 0.2).ceil()) &&
+      changeRatio >= 0.05;
+}
+
+List<double> _orderedMinMaxBuckets(List<double> values, int maximumPoints) {
+  final bucketCount = math.max(1, maximumPoints ~/ 2);
+  final bucketSize = values.length / bucketCount;
+  final result = <double>[];
+  for (var bucket = 0; bucket < bucketCount; bucket++) {
+    final start = (bucket * bucketSize).floor();
+    final end = math.min(values.length, ((bucket + 1) * bucketSize).ceil());
+    if (start >= end) continue;
+    var minimum = values[start];
+    var maximum = values[start];
+    var minimumIndex = start;
+    var maximumIndex = start;
+    for (var index = start + 1; index < end; index++) {
+      final value = values[index];
+      if (value < minimum) {
+        minimum = value;
+        minimumIndex = index;
+      }
+      if (value > maximum) {
+        maximum = value;
+        maximumIndex = index;
+      }
+    }
+    if (minimumIndex <= maximumIndex) {
+      result.add(minimum);
+      if (maximumIndex != minimumIndex) result.add(maximum);
+    } else {
+      result.add(maximum);
+      result.add(minimum);
+    }
+  }
+  return result;
+}
+
+double _percentile(List<double> sorted, double percentile) {
+  if (sorted.length == 1) return sorted.single;
+  final position = (sorted.length - 1) * percentile;
+  final lowerIndex = position.floor();
+  final upperIndex = position.ceil();
+  if (lowerIndex == upperIndex) return sorted[lowerIndex];
+  final fraction = position - lowerIndex;
+  return sorted[lowerIndex] * (1 - fraction) + sorted[upperIndex] * fraction;
+}
