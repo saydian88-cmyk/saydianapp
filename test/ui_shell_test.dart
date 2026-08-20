@@ -452,6 +452,162 @@ void main() {
     },
   );
 
+  test(
+    'a second manual measurement is blocked until the first one stops',
+    () async {
+      final wearable = _TrackingMeasurementWearable();
+      final controller =
+          AppController(
+              MemorySessionVault(),
+              _NoopApi(),
+              MemoryHealthStore(),
+              wearable,
+            )
+            ..connectedDevice = const DeviceInfo(id: 'watch-1', name: 'W9S')
+            ..capabilities = const DeviceCapabilities(
+              metrics: {HealthMetric.heartRate, HealthMetric.hrv},
+            );
+      for (final state in const [
+        DeviceConnectionState.scanning,
+        DeviceConnectionState.connecting,
+        DeviceConnectionState.authenticating,
+        DeviceConnectionState.syncing,
+        DeviceConnectionState.ready,
+      ]) {
+        controller.deviceMachine.transition(state);
+      }
+      addTearDown(controller.dispose);
+
+      expect(await controller.startMeasurement(HealthMetric.heartRate), isTrue);
+      expect(await controller.startMeasurement(HealthMetric.hrv), isFalse);
+      expect(wearable.starts, 1);
+      expect(controller.errorMessage, contains('另一项手表测量尚未结束'));
+
+      await controller.stopMeasurement(HealthMetric.heartRate);
+      expect(controller.deviceState, DeviceConnectionState.ready);
+      expect(wearable.stops, 1);
+    },
+  );
+
+  test(
+    'a failed stop still releases the controller for the next measurement',
+    () async {
+      final wearable = _FailingStopMeasurementWearable();
+      final controller =
+          AppController(
+              MemorySessionVault(),
+              _NoopApi(),
+              MemoryHealthStore(),
+              wearable,
+            )
+            ..connectedDevice = const DeviceInfo(id: 'watch-1', name: 'W9S')
+            ..capabilities = const DeviceCapabilities(
+              metrics: {HealthMetric.ecg, HealthMetric.hrv},
+            );
+      for (final state in const [
+        DeviceConnectionState.scanning,
+        DeviceConnectionState.connecting,
+        DeviceConnectionState.authenticating,
+        DeviceConnectionState.syncing,
+        DeviceConnectionState.ready,
+      ]) {
+        controller.deviceMachine.transition(state);
+      }
+      addTearDown(controller.dispose);
+
+      expect(await controller.startMeasurement(HealthMetric.ecg), isTrue);
+      await controller.stopMeasurement(HealthMetric.ecg);
+      expect(controller.deviceState, DeviceConnectionState.ready);
+      expect(controller.errorMessage, '停止测量失败');
+      expect(await controller.startMeasurement(HealthMetric.hrv), isTrue);
+      expect(wearable.starts, 2);
+    },
+  );
+
+  testWidgets('ECG measurement waits for the full watch cycle', (tester) async {
+    final wearable = _TrackingMeasurementWearable();
+    final controller =
+        AppController(
+            MemorySessionVault(),
+            _NoopApi(),
+            MemoryHealthStore(),
+            wearable,
+          )
+          ..connectedDevice = const DeviceInfo(id: 'watch-1', name: 'W9S')
+          ..capabilities = const DeviceCapabilities(
+            metrics: {HealthMetric.ecg},
+          );
+    for (final state in const [
+      DeviceConnectionState.scanning,
+      DeviceConnectionState.connecting,
+      DeviceConnectionState.authenticating,
+      DeviceConnectionState.syncing,
+      DeviceConnectionState.ready,
+    ]) {
+      controller.deviceMachine.transition(state);
+    }
+    addTearDown(controller.dispose);
+
+    expect(await controller.startMeasurement(HealthMetric.ecg), isTrue);
+    await tester.pump(const Duration(seconds: 76));
+    expect(controller.deviceState, DeviceConnectionState.measuring);
+    expect(controller.measurementErrorMessage, isNull);
+
+    await tester.pump(const Duration(seconds: 45));
+    expect(controller.deviceState, DeviceConnectionState.ready);
+    expect(controller.measurementErrorMessage, contains('长时间未检测到有效结果'));
+    expect(wearable.stops, 1);
+  });
+
+  testWidgets('HRV manual measurement does not ask for ECG electrode contact', (
+    tester,
+  ) async {
+    final wearable = _TrackingMeasurementWearable();
+    final controller =
+        AppController(
+            MemorySessionVault(),
+            _NoopApi(),
+            MemoryHealthStore(),
+            wearable,
+          )
+          ..connectedDevice = const DeviceInfo(id: 'watch-1', name: 'W9S')
+          ..capabilities = const DeviceCapabilities(
+            metrics: {HealthMetric.hrv},
+          );
+    for (final state in const [
+      DeviceConnectionState.scanning,
+      DeviceConnectionState.connecting,
+      DeviceConnectionState.authenticating,
+      DeviceConnectionState.syncing,
+      DeviceConnectionState.ready,
+    ]) {
+      controller.deviceMachine.transition(state);
+    }
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSaydianTheme(),
+        home: HealthHistoryPage(
+          controller: controller,
+          metric: HealthMetric.hrv,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('health-measure-hrv')));
+    await tester.pump();
+
+    expect(find.text('HRV测量'), findsOneWidget);
+    expect(find.text('请将手表贴合手腕并保持静止，等待 HRV 测量结果'), findsOneWidget);
+    expect(find.textContaining('心电电极'), findsNothing);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(wearable.starts, 1);
+    expect(wearable.stops, 1);
+  });
+
   test('measurement waits until the device history sync is complete', () async {
     final wearable = _TrackingMeasurementWearable();
     final controller =
@@ -603,6 +759,67 @@ void main() {
     expect(find.text('重新测量'), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsNothing);
     expect(controller.deviceState, DeviceConnectionState.ready);
+  });
+
+  testWidgets('body composition contact progress shows wearable guidance', (
+    tester,
+  ) async {
+    final wearable = _EventMeasurementWearable();
+    final controller = AppController(
+      MemorySessionVault(),
+      _NoopApi(),
+      MemoryHealthStore(),
+      wearable,
+    );
+    await controller.initialize();
+    controller.connectedDevice = const DeviceInfo(id: 'watch-1', name: 'W9S');
+    controller.capabilities = const DeviceCapabilities(
+      metrics: {HealthMetric.bodyComposition},
+    );
+    for (final state in const [
+      DeviceConnectionState.scanning,
+      DeviceConnectionState.connecting,
+      DeviceConnectionState.authenticating,
+      DeviceConnectionState.syncing,
+      DeviceConnectionState.ready,
+    ]) {
+      controller.deviceMachine.transition(state);
+    }
+    addTearDown(() async {
+      controller.dispose();
+      await wearable.close();
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSaydianTheme(),
+        home: HealthHistoryPage(
+          controller: controller,
+          metric: HealthMetric.bodyComposition,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('health-measure-body_composition')));
+    await tester.pump();
+    wearable.emit(
+      const WearableEvent(
+        type: 'measurementProgress',
+        payload: {
+          'metric': 'body_composition',
+          'progress': 12,
+          'deviceState': 'UNPASS_WEAR',
+        },
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('未检测到正确接触，请佩戴手表并按手表提示接触电极'), findsOneWidget);
+    expect(find.text('测量进度 12%'), findsOneWidget);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(wearable.stops, 1);
   });
 
   test(
@@ -1047,6 +1264,14 @@ class _FailingMeasurementWearable extends _NoopWearable {
   @override
   Future<void> startMeasurement(HealthMetric metric) async {
     throw StateError('simulated start failure');
+  }
+}
+
+class _FailingStopMeasurementWearable extends _TrackingMeasurementWearable {
+  @override
+  Future<void> stopMeasurement(HealthMetric metric) async {
+    stops++;
+    throw StateError('simulated stop failure');
   }
 }
 

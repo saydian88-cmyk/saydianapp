@@ -1516,13 +1516,21 @@ class _HealthMeasurementDialogState extends State<_HealthMeasurementDialog> {
           final isNew = record != null && record.measuredAt.isAfter(_startedAt);
           final failure = widget.controller.measurementErrorMessage;
           final failed = !isNew && failure != null;
-          final waitingMessage = switch (widget.metric) {
-            HealthMetric.bloodPressure => '已通知手表进入血压测量，请按手表提示开始并保持正确姿势',
-            HealthMetric.ecg || HealthMetric.hrv => '请正确佩戴手表，并将手指持续贴在心电电极上',
-            HealthMetric.bodyComposition ||
-            HealthMetric.bloodComposition => '请按手表提示保持正确接触，测量完成前不要移动',
-            _ => '请保持正确佩戴并静止，等待手表返回结果',
-          };
+          final waitingMessage = !widget.controller.measurementWearConfirmed
+              ? switch (widget.metric) {
+                  HealthMetric.ecg => '未检测到电极接触，请正确佩戴手表并将手指持续贴在心电电极上',
+                  HealthMetric.bodyComposition ||
+                  HealthMetric.bloodComposition => '未检测到正确接触，请佩戴手表并按手表提示接触电极',
+                  _ => '未检测到正确佩戴，请将手表贴合手腕后继续测量',
+                }
+              : switch (widget.metric) {
+                  HealthMetric.bloodPressure => '正在测量血压，请保持手表贴合手腕、手臂静止并等待结果',
+                  HealthMetric.ecg => '请正确佩戴手表，并将手指持续贴在心电电极上',
+                  HealthMetric.hrv => '请将手表贴合手腕并保持静止，等待 HRV 测量结果',
+                  HealthMetric.bodyComposition ||
+                  HealthMetric.bloodComposition => '请按手表提示保持正确接触，测量完成前不要移动',
+                  _ => '请保持正确佩戴并静止，等待手表返回结果',
+                };
           return AlertDialog(
             title: Text('${widget.metric.label}测量'),
             content: Column(

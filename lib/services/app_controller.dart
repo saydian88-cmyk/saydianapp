@@ -615,6 +615,13 @@ class AppController extends ChangeNotifier {
   }
 
   Future<bool> startMeasurement(HealthMetric metric) async {
+    if (_activeMeasurementMetric != null ||
+        deviceState == DeviceConnectionState.measuring) {
+      measurementErrorMessage = '另一项手表测量尚未结束，请稍后重试';
+      errorMessage = measurementErrorMessage;
+      notifyListeners();
+      return false;
+    }
     _measurementTimeout?.cancel();
     _activeMeasurementMetric = null;
     measurementErrorMessage = null;
@@ -647,7 +654,7 @@ class AppController extends ChangeNotifier {
         return false;
       }
       _measurementTimeout = Timer(
-        const Duration(seconds: 75),
+        _measurementTimeoutFor(metric),
         () => unawaited(_handleMeasurementTimeout(metric)),
       );
       notifyListeners();
@@ -689,12 +696,15 @@ class AppController extends ChangeNotifier {
     measurementWearConfirmed = true;
     measurementSamples = const [];
     try {
-      await _wearable.stopMeasurement(metric);
+      await _wearable
+          .stopMeasurement(metric)
+          .timeout(const Duration(seconds: 5));
+    } catch (_) {
+      errorMessage = '停止测量失败';
+    } finally {
       if (deviceState == DeviceConnectionState.measuring) {
         deviceMachine.transition(DeviceConnectionState.ready);
       }
-    } catch (_) {
-      errorMessage = '停止测量失败';
     }
     notifyListeners();
   }
@@ -732,6 +742,14 @@ class AppController extends ChangeNotifier {
       // best-effort and must not replace the wear guidance.
     }
   }
+
+  Duration _measurementTimeoutFor(HealthMetric metric) => switch (metric) {
+    HealthMetric.ecg || HealthMetric.hrv => const Duration(seconds: 120),
+    HealthMetric.bloodPressure ||
+    HealthMetric.bodyComposition ||
+    HealthMetric.bloodComposition => const Duration(seconds: 90),
+    _ => const Duration(seconds: 75),
+  };
 
   Future<bool> saveHealthWarningSettings(HealthWarningSettings settings) async {
     if (settings.heartRateUpper < 20 || settings.heartRateUpper > 300) {
@@ -1620,10 +1638,23 @@ class AppController extends ChangeNotifier {
       'TEMPERATURE_DEVICE_BUSY',
       'GLUCOSE_MEASUREMENT_FAILED',
       'BODY_COMPOSITION_FAILED',
+      'BODY_COMPOSITION_NOT_WORN',
+      'BODY_COMPOSITION_BUSY',
+      'BODY_COMPOSITION_LOW_BATTERY',
       'BLOOD_COMPONENT_FAILED',
+      'BLOOD_COMPONENT_NOT_WORN',
+      'BLOOD_COMPONENT_BUSY',
+      'BLOOD_COMPONENT_LOW_BATTERY',
       'ECG_MEASUREMENT_FAILED',
       'ECG_NOT_WORN',
+      'HRV_MEASUREMENT_FAILED',
+      'HRV_NOT_WORN',
+      'HRV_DEVICE_BUSY',
+      'HRV_LOW_BATTERY',
+      'MEASUREMENT_DEVICE_BUSY',
+      'MEASUREMENT_START_FAILED',
       'MEASUREMENT_COMMAND_FAILED',
+      'MEASUREMENT_STOP_FAILED',
     };
     return measurementErrors.contains(code);
   }

@@ -53,6 +53,7 @@ import com.veepoo.protocol.listener.data.IDeviceFuctionDataListener
 import com.veepoo.protocol.listener.data.IFindDevicelistener
 import com.veepoo.protocol.listener.data.IFunSwitchListener
 import com.veepoo.protocol.listener.data.IHeartDataListener
+import com.veepoo.protocol.listener.data.IHrvDetectListener
 import com.veepoo.protocol.listener.data.IECGDetectListener
 import com.veepoo.protocol.listener.data.IHealthAlarmIntervalListener
 import com.veepoo.protocol.listener.data.ILongSeatDataListener
@@ -145,6 +146,7 @@ import com.veepoo.protocol.model.enums.EWeatherType
 import com.veepoo.protocol.model.enums.EWatchUIElementPosition
 import com.veepoo.protocol.model.enums.EWatchUIElementType
 import com.veepoo.protocol.model.enums.HealthRemindType
+import com.veepoo.protocol.model.enums.HrvDetectState
 import com.veepoo.protocol.model.settings.Alarm2Setting
 import com.veepoo.protocol.model.settings.BpSetting
 import com.veepoo.protocol.model.settings.CustomSettingData
@@ -342,6 +344,11 @@ class MainActivity : FlutterActivity() {
                     else -> callback.notImplemented()
                 }
             } catch (error: Throwable) {
+                Log.e(
+                    "SaidianMain",
+                    "Wearable method failed method=${call.method} feature=$feature",
+                    error,
+                )
                 callback.error("WEARABLE_ERROR", error.message ?: "设备通信失败")
             }
         }
@@ -3978,30 +3985,50 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             callback.error("UNSUPPORTED_METRIC", "当前设备不支持该指标")
             return
         }
+        if (activeMetric != null) {
+            callback.error("MEASUREMENT_DEVICE_BUSY", "另一项手表测量尚未结束，请稍后重试")
+            return
+        }
         activeMetric = metric
         Log.i(LOG_TAG, "measurement start metric=$metric device=$connectedDeviceId")
         emit("state", mapOf("value" to "measuring", "metric" to metric))
-        when (metric) {
-            "heart_rate" -> manager.startDetectHeart(measurementWrite(callback), heartDataListener)
-            "blood_pressure" -> startBloodPressureMeasurement(callback)
-            "blood_oxygen" -> manager.startDetectSPO2H(measurementWrite(callback), oxygenDataListener)
-            "body_temperature" -> {
-                temperatureRetryUsed = false
-                manager.startDetectTempture(measurementWrite(callback), temperatureDataListener)
+        try {
+            when (metric) {
+                "heart_rate" -> manager.startDetectHeart(measurementWrite(callback), heartDataListener)
+                "blood_pressure" -> startBloodPressureMeasurement(callback)
+                "blood_oxygen" -> manager.startDetectSPO2H(measurementWrite(callback), oxygenDataListener)
+                "body_temperature" -> {
+                    temperatureRetryUsed = false
+                    manager.startDetectTempture(measurementWrite(callback), temperatureDataListener)
+                }
+                "blood_glucose" -> manager.startBloodGlucoseDetect(measurementWrite(callback), bloodGlucoseListener)
+                "body_composition" -> manager.startDetectBodyComponent(measurementWrite(callback), bodyComponentListener)
+                "blood_composition" ->
+                    manager.startDetectBloodComponent(measurementWrite(callback), false, bloodComponentListener)
+                "ecg" -> {
+                    activeEcgSamples.clear()
+                    manager.startDetectECG(measurementWrite(callback), true, ecgListener)
+                }
+                "hrv" -> manager.startDetectHrv(measurementWrite(callback), hrvListener)
+                else -> {
+                    synchronized(this) { activeMetric = null }
+                    callback.error("MEASUREMENT_NOT_AVAILABLE", "该指标仅支持同步手表历史数据")
+                }
             }
-            "blood_glucose" -> manager.startBloodGlucoseDetect(measurementWrite(callback), bloodGlucoseListener)
-            "body_composition" -> manager.startDetectBodyComponent(measurementWrite(callback), bodyComponentListener)
-            "blood_composition" -> manager.startDetectBloodComponent(measurementWrite(callback), false, bloodComponentListener)
-            "ecg", "hrv" -> {
-                activeEcgSamples.clear()
-                manager.startDetectECG(measurementWrite(callback), true, ecgListener)
+        } catch (error: Throwable) {
+            synchronized(this) {
+                if (activeMetric == metric) activeMetric = null
             }
-            else -> callback.error("MEASUREMENT_NOT_AVAILABLE", "该指标仅支持同步手表历史数据")
+            Log.e(LOG_TAG, "measurement start failed metric=$metric", error)
+            callback.error(
+                "MEASUREMENT_START_FAILED",
+                "暂时无法开始${measurementMetricLabel(metric)}测量，请稍后重试",
+            )
         }
     }
 
     fun stopMeasurement(metric: String, callback: ResultCallback<Unit>) {
-        val response = measurementWrite(callback)
+        val response = measurementStopWrite(callback, metric)
         when (metric) {
             "heart_rate" -> manager.stopDetectHeart(response)
             "blood_pressure" -> {
@@ -4027,7 +4054,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             "blood_glucose" -> manager.stopBloodGlucoseDetect(response, bloodGlucoseListener)
             "body_composition" -> manager.stopDetectBodyComponent(response)
             "blood_composition" -> manager.stopDetectBloodComponent(response)
-            "ecg", "hrv" -> manager.stopDetectECG(response, true, ecgListener)
+            "ecg" -> manager.stopDetectECG(response, true, ecgListener)
+            "hrv" -> manager.stopDetectHrv(response, hrvListener)
             else -> callback.error("MEASUREMENT_NOT_AVAILABLE", "该指标没有可停止的实时测量")
         }
         activeMetric = null
@@ -4036,41 +4064,11 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     private fun startBloodPressureMeasurement(callback: ResultCallback<Unit>) {
         val generation = ++bloodPressureStartGeneration
         pendingBloodPressureStart = callback
-        val preferences = VpSpGetUtil.getVpSpVariInstance(appContext)
-        if (preferences.isSupportMiniCheckup) {
-            Log.i(
-                LOG_TAG,
-                "blood pressure protocol miniCheckup=true type=${preferences.miniCheckupType}",
-            )
-            beginMiniCheckupBloodPressureMeasurement(generation)
-            return
-        }
-        bloodPressureWearTimeoutTask?.let(connectionHandler::removeCallbacks)
-        val wearTimeout =
-            Runnable {
-                runCatching { manager.stopDetectHeart { } }
-                failPendingBloodPressureStart(
-                    generation,
-                    "BLOOD_PRESSURE_NOT_WORN",
-                    "未检测到有效佩戴状态，请将手表贴合手腕后重新测量血压",
-                )
-            }
-        bloodPressureWearTimeoutTask = wearTimeout
-        connectionHandler.postDelayed(wearTimeout, BLOOD_PRESSURE_WEAR_TIMEOUT_MS)
-        manager.startDetectHeart(
-            IBleWriteResponse { code ->
-                if (code != Code.REQUEST_SUCCESS) {
-                    connectionHandler.post {
-                        failPendingBloodPressureStart(
-                            generation,
-                            "BLOOD_PRESSURE_WEAR_CHECK_FAILED",
-                            "暂时无法检测佩戴状态，请稍后重试",
-                        )
-                    }
-                }
-            },
-            bloodPressureWearListener,
+        Log.i(
+            LOG_TAG,
+            "blood pressure protocol=classic_public (official manual BP flow)",
         )
+        beginBloodPressureMeasurement(generation, EBPDetectModel.DETECT_MODEL_PUBLIC)
     }
 
     private fun applyPhotoWatchFaceLayout(
@@ -4479,8 +4477,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 "progress=${data.progress} value=${data.tempture} active=$activeMetric",
         )
         if (data.oprate == 1 &&
-            data.deviceState == 0 &&
-            data.progress >= 100 &&
+            data.deviceState in setOf(0, 7) &&
+            (data.progress >= 100 || data.deviceState == 7) &&
             data.tempture in 20.0f..45.0f &&
             claimMeasurementResult("body_temperature")
         ) {
@@ -4494,20 +4492,40 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 failMeasurement("body_temperature", "TEMPERATURE_LOW_BATTERY", "手表电量过低，充电后再测量")
             data.deviceState == 9 ->
                 failMeasurement("body_temperature", "TEMPERATURE_SENSOR_ERROR", "体温传感器暂时不可用，请重新佩戴后重试")
-            data.deviceState in 1..7 && !temperatureRetryUsed && activeMetric == "body_temperature" -> {
+            data.deviceState in 1..6 && !temperatureRetryUsed && activeMetric == "body_temperature" -> {
                 temperatureRetryUsed = true
                 Log.i(LOG_TAG, "temperature device busy; stop stale session and retry once")
-                runCatching { manager.stopDetectTempture({ }, temperatureDataListener) }
-                connectionHandler.postDelayed(
-                    {
-                        if (activeMetric == "body_temperature") {
-                            manager.startDetectTempture({ }, temperatureDataListener)
-                        }
-                    },
-                    800,
-                )
+                runCatching {
+                    manager.stopDetectTempture(
+                        IBleWriteResponse { code ->
+                            if (code == Code.REQUEST_SUCCESS) {
+                                connectionHandler.postDelayed(
+                                    {
+                                        if (activeMetric == "body_temperature") {
+                                            manager.startDetectTempture({ }, temperatureDataListener)
+                                        }
+                                    },
+                                    MEASUREMENT_STOP_SETTLE_MS,
+                                )
+                            } else {
+                                failMeasurement(
+                                    "body_temperature",
+                                    "TEMPERATURE_DEVICE_BUSY",
+                                    "手表仍在处理其他任务，请退出手表其他测量后重试",
+                                )
+                            }
+                        },
+                        temperatureDataListener,
+                    )
+                }.onFailure {
+                    failMeasurement(
+                        "body_temperature",
+                        "TEMPERATURE_DEVICE_BUSY",
+                        "手表仍在处理其他任务，请退出手表其他测量后重试",
+                    )
+                }
             }
-            data.deviceState in 1..7 ->
+            data.deviceState in 1..6 ->
                 failMeasurement("body_temperature", "TEMPERATURE_DEVICE_BUSY", "手表仍在处理其他任务，请退出手表其他测量后重试")
         }
     }
@@ -4547,7 +4565,16 @@ private class VeepooWearableAdapter(context: android.content.Context) {
 
     private val bodyComponentListener =
         object : IBodyComponentDetectListener {
-            override fun onDetecting(progress: Int, lead: Int) = Unit
+            override fun onDetecting(progress: Int, lead: Int) {
+                emit(
+                    "measurementProgress",
+                    mapOf(
+                        "metric" to "body_composition",
+                        "progress" to progress.coerceIn(0, 100),
+                        "deviceState" to if (lead == 0) "FREE" else "UNPASS_WEAR",
+                    ),
+                )
+            }
 
             override fun onDetectSuccess(data: BodyComponent) {
                 val values = bodyComponentValues(data)
@@ -4557,7 +4584,16 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             }
 
             override fun onDetectFailed(state: DetectState) {
-                failMeasurement("body_composition", "BODY_COMPOSITION_FAILED", "身体成分测量未完成")
+                val (code, message) =
+                    when (state) {
+                        DetectState.BUSY ->
+                            "BODY_COMPOSITION_BUSY" to "手表正在处理其他任务，请稍后重试"
+                        DetectState.LOW_POWER ->
+                            "BODY_COMPOSITION_LOW_BATTERY" to "手表电量过低，充电后再测量身体成分"
+                        else ->
+                            "BODY_COMPOSITION_NOT_WORN" to "请正确佩戴手表并保持电极接触后重新测量身体成分"
+                    }
+                failMeasurement("body_composition", code, message)
             }
 
             override fun onDetectStop() = Unit
@@ -4566,10 +4602,30 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     private val bloodComponentListener =
         object : IBloodComponentDetectListener {
             override fun onDetectFailed(state: EBloodComponentDetectState) {
-                failMeasurement("blood_composition", "BLOOD_COMPONENT_FAILED", "血液成分测量未完成")
+                val (code, message) =
+                    when (state) {
+                        EBloodComponentDetectState.WEAR_ERROR ->
+                            "BLOOD_COMPONENT_NOT_WORN" to "请正确佩戴手表并保持电极接触后重新测量血液成分"
+                        EBloodComponentDetectState.BUSY,
+                        EBloodComponentDetectState.DETECTING,
+                        -> "BLOOD_COMPONENT_BUSY" to "手表正在处理其他任务，请稍后重试"
+                        EBloodComponentDetectState.LOW_POWER ->
+                            "BLOOD_COMPONENT_LOW_BATTERY" to "手表电量过低，充电后再测量血液成分"
+                        else ->
+                            "BLOOD_COMPONENT_FAILED" to "血液成分测量未完成，请保持正确佩戴后重试"
+                    }
+                failMeasurement("blood_composition", code, message)
             }
 
-            override fun onDetecting(progress: Int, data: BloodComponent) = Unit
+            override fun onDetecting(progress: Int, data: BloodComponent) {
+                emit(
+                    "measurementProgress",
+                    mapOf(
+                        "metric" to "blood_composition",
+                        "progress" to progress.coerceIn(0, 100),
+                    ),
+                )
+            }
             override fun onDetectStop() = Unit
 
             override fun onDetectComplete(data: BloodComponent) {
@@ -4617,8 +4673,12 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             }
 
             override fun onEcgDetectResultChange(result: EcgDetectResult) {
+                Log.d(
+                    LOG_TAG,
+                    "ecg result callback success=${result.isSuccess} heart=${result.aveHeart} hrv=${result.aveHrv} qt=${result.aveQT}",
+                )
                 if (!result.isSuccess) {
-                    failMeasurement(activeMetric ?: "ecg", "ECG_MEASUREMENT_FAILED", "心电测量未完成，请保持接触电极后重试")
+                    deferEcgFailure(activeMetric ?: "ecg")
                     return
                 }
                 val values = buildMap<String, Number> {
@@ -4653,8 +4713,12 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             }
 
             override fun onEcgDetectDiagnosisChange(diagnosis: EcgDiagnosis) {
+                Log.d(
+                    LOG_TAG,
+                    "ecg diagnosis callback success=${diagnosis.isSuccess} heart=${diagnosis.heartRate} hrv=${diagnosis.hrv} qt=${diagnosis.qtTime}",
+                )
                 if (!diagnosis.isSuccess) {
-                    failMeasurement(activeMetric ?: "ecg", "ECG_MEASUREMENT_FAILED", "心电测量未完成，请保持接触电极后重试")
+                    deferEcgFailure(activeMetric ?: "ecg")
                     return
                 }
                 val values = buildMap<String, Number> {
@@ -4703,6 +4767,32 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             }
         }
 
+    private val hrvListener =
+        object : IHrvDetectListener {
+            override fun onHrvDetect(hrv: Int) {
+                if (hrv > 0 && claimMeasurementResult("hrv")) {
+                    emitRecord(record("hrv", mapOf("value" to hrv), "ms", Date()))
+                }
+            }
+
+            override fun onDetectFailed(state: HrvDetectState) {
+                val (code, message) =
+                    when (state) {
+                        HrvDetectState.WEAR_OFF ->
+                            "HRV_NOT_WORN" to "请将手表贴合手腕并保持静止后重新测量 HRV"
+                        HrvDetectState.BUSY ->
+                            "HRV_DEVICE_BUSY" to "手表正在处理其他任务，请稍后重试"
+                        HrvDetectState.LOW_POWER ->
+                            "HRV_LOW_BATTERY" to "手表电量过低，充电后再测量 HRV"
+                        else ->
+                            "HRV_MEASUREMENT_FAILED" to "HRV 测量未完成，请保持正确佩戴后重试"
+                    }
+                failMeasurement("hrv", code, message)
+            }
+
+            override fun onDetectStop() = Unit
+        }
+
     private fun claimMeasurementResult(metric: String): Boolean =
         synchronized(this) {
             if (activeMetric != metric) {
@@ -4726,6 +4816,21 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         }
     }
 
+    private fun deferEcgFailure(metric: String) {
+        connectionHandler.postDelayed(
+            {
+                if (activeMetric == metric) {
+                    failMeasurement(
+                        metric,
+                        "ECG_MEASUREMENT_FAILED",
+                        "心电测量未完成，请保持接触电极后重试",
+                    )
+                }
+            },
+            ECG_RESULT_SETTLE_MS,
+        )
+    }
+
     private fun stopFailedMeasurement(metric: String) {
         val ignored = IBleWriteResponse { }
         runCatching {
@@ -4744,7 +4849,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 "blood_glucose" -> manager.stopBloodGlucoseDetect(ignored, bloodGlucoseListener)
                 "body_composition" -> manager.stopDetectBodyComponent(ignored)
                 "blood_composition" -> manager.stopDetectBloodComponent(ignored)
-                "ecg", "hrv" -> manager.stopDetectECG(ignored, true, ecgListener)
+                "ecg" -> manager.stopDetectECG(ignored, true, ecgListener)
+                "hrv" -> manager.stopDetectHrv(ignored, hrvListener)
             }
         }.onFailure { error ->
             Log.w(LOG_TAG, "Failed to stop $metric after terminal measurement error", error)
@@ -4771,17 +4877,72 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             if (data.lDL > 0) put("lowDensityLipoprotein", data.lDL)
         }
 
-    private fun measurementWrite(callback: ResultCallback<Unit>) =
-        IBleWriteResponse { code ->
+    private fun measurementWrite(callback: ResultCallback<Unit>): IBleWriteResponse {
+        val metric = activeMetric.orEmpty()
+        val completed = AtomicBoolean(false)
+        connectionHandler.postDelayed(
+            {
+                if (activeMetric == metric && completed.compareAndSet(false, true)) {
+                    Log.w(LOG_TAG, "measurement start callback timed out metric=$metric; waiting for sensor result")
+                    callback.success(Unit)
+                }
+            },
+            MEASUREMENT_START_ACK_TIMEOUT_MS,
+        )
+        return IBleWriteResponse { code ->
             if (code == Code.REQUEST_SUCCESS) {
                 Log.d(LOG_TAG, "measurement command accepted active=$activeMetric")
-                callback.success(Unit)
-            }
-            else {
+                if (completed.compareAndSet(false, true)) callback.success(Unit)
+            } else {
                 Log.w(LOG_TAG, "measurement command rejected code=$code active=$activeMetric")
-                synchronized(this) { activeMetric = null }
-                callback.error("MEASUREMENT_COMMAND_FAILED", "暂时无法开始测量，请稍后重试")
+                if (completed.compareAndSet(false, true)) {
+                    synchronized(this) { activeMetric = null }
+                    callback.error("MEASUREMENT_COMMAND_FAILED", "暂时无法开始测量，请稍后重试")
+                } else {
+                    failMeasurement(metric, "MEASUREMENT_COMMAND_FAILED", "暂时无法开始测量，请稍后重试")
+                }
             }
+        }
+    }
+
+    private fun measurementStopWrite(
+        callback: ResultCallback<Unit>,
+        metric: String,
+    ): IBleWriteResponse {
+        val completed = AtomicBoolean(false)
+        connectionHandler.postDelayed(
+            {
+                if (completed.compareAndSet(false, true)) {
+                    Log.w(LOG_TAG, "measurement stop callback timed out metric=$metric; releasing session")
+                    callback.success(Unit)
+                }
+            },
+            MEASUREMENT_STOP_CALLBACK_TIMEOUT_MS,
+        )
+        return IBleWriteResponse { code ->
+            if (!completed.compareAndSet(false, true)) return@IBleWriteResponse
+            if (code == Code.REQUEST_SUCCESS) {
+                Log.d(LOG_TAG, "measurement stop accepted metric=$metric; waiting for device settle")
+                connectionHandler.postDelayed(
+                    { callback.success(Unit) },
+                    MEASUREMENT_STOP_SETTLE_MS,
+                )
+            } else {
+                Log.w(LOG_TAG, "measurement stop rejected code=$code metric=$metric")
+                callback.error("MEASUREMENT_STOP_FAILED", "暂时无法停止${measurementMetricLabel(metric)}测量")
+            }
+        }
+    }
+
+    private fun measurementMetricLabel(metric: String): String =
+        when (metric) {
+            "blood_pressure" -> "血压"
+            "body_temperature" -> "体温"
+            "ecg" -> "心电"
+            "hrv" -> "HRV"
+            "body_composition" -> "身体成分"
+            "blood_composition" -> "血液成分"
+            else -> "当前"
         }
 
     private fun writeResponse(callback: ResultCallback<*>, message: String) =
@@ -5027,6 +5188,10 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         // watch is not rejected just before that sample arrives.
         private const val BLOOD_PRESSURE_WEAR_TIMEOUT_MS = 20_000L
         private const val BLOOD_PRESSURE_MODE_TIMEOUT_MS = 4_000L
+        private const val MEASUREMENT_START_ACK_TIMEOUT_MS = 1_500L
+        private const val MEASUREMENT_STOP_SETTLE_MS = 1_200L
+        private const val MEASUREMENT_STOP_CALLBACK_TIMEOUT_MS = 3_000L
+        private const val ECG_RESULT_SETTLE_MS = 2_000L
         private const val ALARM_CACHE_FALLBACK_MS = 1_000L
         private const val ALARM_CACHE_SETTLE_MS = 120L
         private const val ALARM_WRITE_VERIFY_DELAY_MS = 1_200L
