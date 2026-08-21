@@ -15,8 +15,8 @@ void main() {
     final waveform = prepareEcgDisplayWaveform(samples, maximumPoints: 240);
 
     expect(waveform.samples.length, lessThanOrEqualTo(240));
-    expect(waveform.samples, contains(90));
-    expect(waveform.samples, contains(-40));
+    expect(waveform.maximum, greaterThan(20));
+    expect(waveform.minimum, lessThan(10));
     expect(waveform.hasVariation, isTrue);
   });
 
@@ -31,6 +31,68 @@ void main() {
     expect(waveform.maximum, lessThan(1000000));
     expect(waveform.minimum, 98);
     expect(waveform.maximum, 102);
+    expect(waveform.hasVariation, isTrue);
+  });
+
+  test('recurring transport bursts do not flatten the ECG trace', () {
+    final samples = List<num>.generate(44000, (index) {
+      if (index % 80 == 0) return 50000;
+      final phase = index % 120;
+      if (phase < 6) return 130 + phase * 12;
+      if (phase < 12) return 202 - (phase - 6) * 12;
+      return 100 + (index % 9) - 4;
+    });
+
+    final waveform = prepareEcgDisplayWaveform(samples, maximumPoints: 1200);
+
+    expect(waveform.maximum, lessThan(50000));
+    expect(waveform.maximum - waveform.minimum, greaterThan(5));
+    expect(waveform.hasVariation, isTrue);
+  });
+
+  test('dense high-amplitude transport noise does not dominate the chart', () {
+    final samples = List<num>.generate(44000, (index) {
+      if (index % 10 == 0) {
+        return index.isEven ? 200000 : -200000;
+      }
+      final phase = index % 100;
+      return phase < 50 ? -500 + phase * 20 : 500 - (phase - 50) * 20;
+    });
+
+    final waveform = prepareEcgDisplayWaveform(samples, maximumPoints: 1200);
+
+    expect(waveform.minimum, greaterThan(-10000));
+    expect(waveform.maximum, lessThan(10000));
+    expect(waveform.maximum - waveform.minimum, greaterThan(500));
+    expect(waveform.hasVariation, isTrue);
+  });
+
+  test('leading and trailing SDK zero padding is removed from display', () {
+    final samples = <num>[
+      ...List<num>.filled(5000, 0),
+      for (var index = 0; index < 1000; index++) index.isEven ? 120 : -80,
+      ...List<num>.filled(5000, 0),
+    ];
+
+    final waveform = prepareEcgDisplayWaveform(samples, maximumPoints: 2000);
+
+    expect(waveform.samples, hasLength(1000));
+    expect(waveform.samples.first, 120);
+    expect(waveform.samples.last, -80);
+    expect(waveform.hasVariation, isTrue);
+  });
+
+  test('narrow repeated peaks survive the central-range fallback', () {
+    final samples = <num>[];
+    for (var beat = 0; beat < 100; beat++) {
+      samples.addAll(List<num>.filled(94, 100));
+      samples.addAll(<num>[130, 160, 190, 160, 130, 70]);
+    }
+
+    final waveform = prepareEcgDisplayWaveform(samples, maximumPoints: 400);
+
+    expect(waveform.minimum, lessThan(100));
+    expect(waveform.maximum, greaterThan(100));
     expect(waveform.hasVariation, isTrue);
   });
 

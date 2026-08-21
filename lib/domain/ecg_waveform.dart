@@ -27,10 +27,19 @@ EcgDisplayWaveform prepareEcgDisplayWaveform(
   Iterable<num> source, {
   required int maximumPoints,
 }) {
-  final values = source
+  final finiteValues = source
       .where((value) => value.isFinite && value.toInt() != 0x7fffffff)
       .map((value) => value.toDouble())
-      .toList(growable: false);
+      .toList();
+  var firstSignal = 0;
+  while (firstSignal < finiteValues.length && finiteValues[firstSignal] == 0) {
+    firstSignal++;
+  }
+  var lastSignal = finiteValues.length;
+  while (lastSignal > firstSignal && finiteValues[lastSignal - 1] == 0) {
+    lastSignal--;
+  }
+  final values = finiteValues.sublist(firstSignal, lastSignal);
   if (values.isEmpty) {
     return const EcgDisplayWaveform(
       samples: [],
@@ -41,12 +50,34 @@ EcgDisplayWaveform prepareEcgDisplayWaveform(
   }
 
   final sorted = [...values]..sort();
-  final lower = _percentile(sorted, 0.005);
-  final upper = _percentile(sorted, 0.995);
+  // Some Veepoo firmware sends short bursts of transport noise alongside an
+  // otherwise usable ECG stream. Keeping 99% of the numeric range lets those
+  // bursts dominate the chart and compresses the actual ECG to a flat-looking
+  // line. Prefer the central 90% for display, but fall back to the wider range
+  // when the signal is mostly a constant baseline with narrow real peaks.
+  final centralLower = _percentile(sorted, 0.05);
+  final centralUpper = _percentile(sorted, 0.95);
+  final quartileLower = _percentile(sorted, 0.25);
+  final quartileUpper = _percentile(sorted, 0.75);
+  final wideLower = _percentile(sorted, 0.005);
+  final wideUpper = _percentile(sorted, 0.995);
   final rawMinimum = sorted.first;
   final rawMaximum = sorted.last;
-  final robustMinimum = upper > lower ? lower : rawMinimum;
-  final robustMaximum = upper > lower ? upper : rawMaximum;
+  final quartileRange = quartileUpper - quartileLower;
+  final centralRange = centralUpper - centralLower;
+  final displayLower = quartileRange > 0 ? quartileLower : centralLower;
+  final displayUpper = quartileRange > 0 ? quartileUpper : centralUpper;
+  final displayRange = quartileRange > 0 ? quartileRange : centralRange;
+  final robustMinimum = displayRange > 0
+      ? math.max(wideLower, displayLower - displayRange * 4)
+      : wideUpper > wideLower
+      ? wideLower
+      : rawMinimum;
+  final robustMaximum = displayRange > 0
+      ? math.min(wideUpper, displayUpper + displayRange * 4)
+      : wideUpper > wideLower
+      ? wideUpper
+      : rawMaximum;
   final clipped = values
       .map((value) => value.clamp(robustMinimum, robustMaximum).toDouble())
       .toList(growable: false);
@@ -61,7 +92,7 @@ EcgDisplayWaveform prepareEcgDisplayWaveform(
     samples: display,
     minimum: minimum,
     maximum: maximum,
-    hasVariation: _hasRepeatedVariation(clipped),
+    hasVariation: _hasRepeatedVariation(values),
   );
 }
 
