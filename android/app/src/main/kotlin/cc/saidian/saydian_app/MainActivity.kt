@@ -102,6 +102,7 @@ import com.veepoo.protocol.model.datas.FunctionDeviceSupportData
 import com.veepoo.protocol.model.datas.FunctionSocailMsgData
 import com.veepoo.protocol.model.datas.FunSwitchFlags
 import com.veepoo.protocol.model.datas.HRVOriginData
+import com.veepoo.protocol.util.EcgUtil
 import com.veepoo.protocol.model.datas.HeartData
 import com.veepoo.protocol.model.datas.HealthAlarmInterval
 import com.veepoo.protocol.model.datas.HealthRemind
@@ -4293,7 +4294,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 "blood_composition" ->
                     manager.startDetectBloodComponent(measurementWrite(callback), false, bloodComponentListener)
                 "ecg" -> {
-                    activeEcgSamples.clear()
+                    synchronized(activeEcgSamples) { activeEcgSamples.clear() }
                     ecgSampleFrequency = DEFAULT_ECG_SAMPLE_FREQUENCY
                     latestEcgHeartRate = 0
                     latestEcgHrv = 0
@@ -4307,7 +4308,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                         // Some W9S firmware exposes HRV only as part of the ECG
                         // result.  Use the vendor ECG result instead of failing
                         // an otherwise measurable HRV entry.
-                        activeEcgSamples.clear()
+                        synchronized(activeEcgSamples) { activeEcgSamples.clear() }
                         ecgSampleFrequency = DEFAULT_ECG_SAMPLE_FREQUENCY
                         latestEcgHeartRate = 0
                         latestEcgHrv = 0
@@ -5133,6 +5134,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                             if (metric == "hrv") "ms" else "",
                             Date(),
                             if (metric == "ecg") samples else emptyList(),
+                            rawVersion = if (metric == "ecg") ECG_CALIBRATED_RAW_VERSION else 1,
                         ),
                     )
                 }
@@ -5185,20 +5187,21 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                             if (metric == "hrv") "ms" else "",
                             Date(),
                             if (metric == "ecg") samples else emptyList(),
+                            rawVersion = if (metric == "ecg") ECG_CALIBRATED_RAW_VERSION else 1,
                         ),
                     )
                 }
             }
 
             override fun onEcgADCChange(data: IntArray, power: IntArray) {
-                val valid = data.filter { it != Int.MAX_VALUE }
-                activeEcgSamples += valid
-                if (valid.isNotEmpty()) {
+                val calibrated = calibrateEcgSamples(data.toList(), power)
+                synchronized(activeEcgSamples) { activeEcgSamples += calibrated }
+                if (calibrated.isNotEmpty()) {
                     emit(
                         "measurementProgress",
                         mapOf(
                             "metric" to (activeMetric ?: "ecg"),
-                            "samples" to valid.takeLast(160),
+                            "samples" to calibrated.takeLast(160),
                         ),
                     )
                 }
@@ -5246,21 +5249,45 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         }
 
     private fun selectEcgSamples(filteredSamples: List<Number>): List<Number> {
-        val filtered = filteredSamples.filter { it.toLong() != Int.MAX_VALUE.toLong() }
-        val live = activeEcgSamples.filter { it.toLong() != Int.MAX_VALUE.toLong() }
-        val filteredCoverage = ecgSampleChangeRatio(filtered)
+        val live =
+            synchronized(activeEcgSamples) {
+                activeEcgSamples.toList()
+            }.filter { it.toLong() != Int.MAX_VALUE.toLong() }
         val liveCoverage = ecgSampleChangeRatio(live)
-        val selected =
-            when {
-                filteredCoverage >= ECG_MIN_SAMPLE_CHANGE_RATIO -> filtered
-                liveCoverage >= ECG_MIN_SAMPLE_CHANGE_RATIO -> live
-                else -> emptyList()
-            }
+        if (liveCoverage >= ECG_MIN_SAMPLE_CHANGE_RATIO) {
+            Log.i(
+                LOG_TAG,
+                "ecg samples filtered=${filteredSamples.size}/skipped live=${live.size}/$liveCoverage selected=${live.size}",
+            )
+            return live
+        }
+        val filtered = calibrateEcgSamples(filteredSamples)
+        val filteredCoverage = ecgSampleChangeRatio(filtered)
+        val selected = if (filteredCoverage >= ECG_MIN_SAMPLE_CHANGE_RATIO) filtered else emptyList()
         Log.i(
             LOG_TAG,
             "ecg samples filtered=${filtered.size}/$filteredCoverage live=${live.size}/$liveCoverage selected=${selected.size}",
         )
         return selected
+    }
+
+    private fun calibrateEcgSamples(
+        rawSamples: List<Number>,
+        powers: IntArray? = null,
+    ): List<Number> {
+        val ecgType =
+            runCatching {
+                VpSpGetUtil.getVpSpVariInstance(appContext).getECGType()
+            }.getOrDefault(0)
+        return rawSamples.mapIndexedNotNull { index, sample ->
+            if (sample.toLong() == Int.MAX_VALUE.toLong()) return@mapIndexedNotNull null
+            val power = powers?.getOrNull(index)?.takeIf { it > 0 } ?: DEFAULT_ECG_POWER
+            runCatching {
+                EcgUtil.convertToMvWithValue(sample.toInt(), ecgType, false, power)
+                    .takeIf { it.isFinite() }
+                    ?.toDouble()
+            }.getOrNull()
+        }
     }
 
     private fun ecgSampleChangeRatio(samples: List<Number>): Double {
@@ -5318,6 +5345,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                                 if (metric == "hrv") "ms" else "",
                                 Date(),
                                 samples,
+                                rawVersion = if (metric == "ecg") ECG_CALIBRATED_RAW_VERSION else 1,
                             ),
                         )
                     } else if (activeMetric == metric) {
@@ -5517,6 +5545,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         unit: String,
         measuredAt: Date,
         samples: List<Number> = emptyList(),
+        rawVersion: Int = 1,
     ): Map<String, Any?> {
         val timestamp = iso8601(measuredAt)
         return buildMap(
@@ -5532,7 +5561,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             "firmwareVersion" to firmwareVersion,
             "quality" to "device_reported",
             "source" to "wearable",
-            "rawVersion" to 1,
+            "rawVersion" to rawVersion,
             ))
             if (samples.isNotEmpty()) put("samples", samples)
         }
@@ -5715,6 +5744,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         private const val MEASUREMENT_STOP_CALLBACK_TIMEOUT_MS = 3_000L
         private const val ECG_RESULT_SETTLE_MS = 5_000L
         private const val ECG_MIN_SAMPLE_CHANGE_RATIO = 0.05
+        private const val ECG_CALIBRATED_RAW_VERSION = 2
+        private const val DEFAULT_ECG_POWER = 20
         private const val ALARM_CACHE_FALLBACK_MS = 1_000L
         private const val ALARM_CACHE_SETTLE_MS = 120L
         private const val ALARM_WRITE_VERIFY_DELAY_MS = 1_200L

@@ -1381,6 +1381,7 @@ class HealthRecordDetailPage extends StatelessWidget {
             _EcgWaveformCard(
               samples: record.samples,
               sampleFrequency: record.values['sampleFrequency']?.toInt() ?? 250,
+              calibrated: record.rawVersion >= 2,
             ),
           ],
           const SizedBox(height: 12),
@@ -3326,13 +3327,34 @@ class _EcgWaveformCard extends StatelessWidget {
   const _EcgWaveformCard({
     required this.samples,
     required this.sampleFrequency,
+    required this.calibrated,
   });
 
   final List<num> samples;
   final int sampleFrequency;
+  final bool calibrated;
 
   @override
   Widget build(BuildContext context) {
+    if (!calibrated) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(12, 16, 12, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('心电波形', style: TextStyle(fontWeight: FontWeight.w800)),
+              SizedBox(height: 10),
+              FeatureStateCard(
+                message: '该记录未保存有效的波形增益信息',
+                detail: '平均心率和 HRV 等结果仍可查看；请使用当前版本重新测量心电，以生成经过设备增益校准的波形。',
+                icon: Icons.monitor_heart_outlined,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     final frequency = sampleFrequency.clamp(50, 1000);
     final durationSeconds = samples.length / frequency;
     final chartWidth = math.max(640.0, durationSeconds * 72.0);
