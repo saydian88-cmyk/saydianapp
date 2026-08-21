@@ -1814,6 +1814,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         val timeout =
             Runnable {
                 if (completed.compareAndSet(false, true)) {
+                    Log.w(LOG_TAG, "Network watch face upload timed out")
                     callback.error("WRITE_TIMEOUT", "表盘传送超时，请保持手表靠近手机后重试")
                 }
             }
@@ -1827,33 +1828,103 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         val startTransfer = {
             prepareJLWatchFaceSession(
                 onReady = {
-                JLWatchHolder.getInstance().updateJLWatchServerDial(
-                    file.absolutePath,
-                    object : JLWatchHolder.OnSetJLWatchDialListener {
-                        override fun onStart() {
-                            emit("deviceFeatureProgress", mapOf("feature" to feature, "progress" to 0))
-                        }
+                    val upload =
+                        Runnable {
+                            JLWatchHolder.getInstance().updateJLWatchServerDial(
+                                file.absolutePath,
+                                object : JLWatchHolder.OnSetJLWatchDialListener {
+                                    override fun onStart() {
+                                        emit(
+                                            "deviceFeatureProgress",
+                                            mapOf("feature" to feature, "progress" to 0),
+                                        )
+                                    }
 
-                        override fun onProgress(progress: Int) {
-                            emit(
-                                "deviceFeatureProgress",
-                                mapOf("feature" to feature, "progress" to progress.coerceIn(0, 100)),
+                                    override fun onProgress(progress: Int) {
+                                        emit(
+                                            "deviceFeatureProgress",
+                                            mapOf(
+                                                "feature" to feature,
+                                                "progress" to progress.coerceIn(0, 100),
+                                            ),
+                                        )
+                                    }
+
+                                    override fun onComplete(path: String?) {
+                                        emit(
+                                            "deviceFeatureProgress",
+                                            mapOf("feature" to feature, "progress" to 100),
+                                        )
+                                        connectionHandler.post {
+                                            // The SDK also switches after refreshing its FAT list,
+                                            // but that command has no completion callback. Repeat it
+                                            // after onComplete so Flutter only reports success once
+                                            // the new server-dial name is available.
+                                            runCatching { JLWatchFaceManager.switch2ServerDial() }
+                                                .onSuccess {
+                                                    Log.i(
+                                                        LOG_TAG,
+                                                        "Network watch face uploaded and switched: $path",
+                                                    )
+                                                    connectionHandler.postDelayed(
+                                                        { finish(true) },
+                                                        WATCH_FACE_SWITCH_SETTLE_MS,
+                                                    )
+                                                }.onFailure { error ->
+                                                    Log.w(
+                                                        LOG_TAG,
+                                                        "Network watch face switch failed",
+                                                        error,
+                                                    )
+                                                    finish(
+                                                        false,
+                                                        "表盘已传输，但启用失败，请在表盘中心重试",
+                                                    )
+                                                }
+                                        }
+                                    }
+
+                                    override fun onFiled(code: Int, message: String?) {
+                                        Log.w(
+                                            LOG_TAG,
+                                            "Network watch face failed: code=$code message=$message",
+                                        )
+                                        connectionHandler.post {
+                                            finish(false, "表盘设置失败，请保持手表靠近手机后重试")
+                                        }
+                                    }
+                                },
                             )
                         }
 
-                        override fun onComplete(path: String?) {
-                            emit("deviceFeatureProgress", mapOf("feature" to feature, "progress" to 100))
-                            connectionHandler.post { finish(true) }
-                        }
-
-                        override fun onFiled(code: Int, message: String?) {
-                            Log.w(LOG_TAG, "Network watch face failed: code=$code message=$message")
-                            connectionHandler.post {
-                                finish(false, "表盘设置失败，请保持手表靠近手机后重试")
+                    val faceManager = JLWatchFaceManager.getInstance()
+                    val currentPath = faceManager.currentFatFile?.path.orEmpty()
+                    val replacingCurrentServerDial =
+                        currentPath.isNotBlank() &&
+                            faceManager.serverFatFiles.any { it.path == currentPath } &&
+                            faceManager.systemFatFiles.isNotEmpty()
+                    if (replacingCurrentServerDial) {
+                        // JLWatchHolder deletes every old server dial before it
+                        // uploads the replacement. W9S never completes deletion
+                        // when the file being deleted is still the active dial.
+                        Log.i(LOG_TAG, "Switching to a system dial before replacing $currentPath")
+                        runCatching { JLWatchFaceManager.switch2SystemDial(0) }
+                            .onSuccess {
+                                connectionHandler.postDelayed(
+                                    upload,
+                                    WATCH_FACE_REPLACE_SETTLE_MS,
+                                )
+                            }.onFailure { error ->
+                                Log.w(
+                                    LOG_TAG,
+                                    "Could not leave the active server dial before replacement",
+                                    error,
+                                )
+                                finish(false, "无法暂时切换到系统表盘，请稍后重试")
                             }
-                        }
-                    },
-                )
+                    } else {
+                        upload.run()
+                    }
                 },
                 onError = { _, message -> finish(false, message) },
             )
@@ -5759,6 +5830,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         private const val JL_SESSION_PREPARE_TIMEOUT_MS = 20_000L
         private const val WATCH_FACE_SWITCH_TIMEOUT_MS = 20_000L
         private const val WATCH_FACE_UPLOAD_TIMEOUT_MS = 150_000L
+        private const val WATCH_FACE_REPLACE_SETTLE_MS = 1_500L
+        private const val WATCH_FACE_SWITCH_SETTLE_MS = 1_000L
         private const val WATCH_FACE_VERIFY_DELAY_MS = 1_200L
         private const val PHOTO_LAYOUT_SETTLE_MS = 180L
         private const val PHOTO_LAYOUT_TIMEOUT_MS = 15_000L
