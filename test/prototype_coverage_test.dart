@@ -127,7 +127,14 @@ void main() {
       final badge = tester.widget<DeviceSdkBadge>(find.byType(DeviceSdkBadge));
       expect(badge.source, WearableSdkSource.veepoo, reason: entry.key.name);
       if (entry.key == DeviceFeature.watchFaces) {
-        expect(find.text('示意'), findsOneWidget);
+        expect(
+          find.byWidgetPredicate(
+            (widget) =>
+                widget is Semantics &&
+                widget.properties.label == '系统表盘 1预览暂不可用',
+          ),
+          findsOneWidget,
+        );
       }
     }
   });

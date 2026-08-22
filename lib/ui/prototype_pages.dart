@@ -1,13 +1,16 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart' show DateFormat;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -1319,6 +1322,9 @@ class HealthRecordDetailPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (record.metric == HealthMetric.ecg) {
+      return _EcgRecordDetailPage(record: record);
+    }
     final time = record.measuredAt.toLocal();
     final date =
         '${time.year}-${time.month.toString().padLeft(2, '0')}-${time.day.toString().padLeft(2, '0')} '
@@ -1418,6 +1424,484 @@ class HealthRecordDetailPage extends StatelessWidget {
             .replaceFirst(RegExp(r'0+$'), '')
             .replaceFirst(RegExp(r'\.$'), '');
 }
+
+class _EcgRecordDetailPage extends StatefulWidget {
+  const _EcgRecordDetailPage({required this.record});
+
+  final HealthRecord record;
+
+  @override
+  State<_EcgRecordDetailPage> createState() => _EcgRecordDetailPageState();
+}
+
+class _EcgRecordDetailPageState extends State<_EcgRecordDetailPage> {
+  int _section = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final record = widget.record;
+    return Scaffold(
+      appBar: AppBar(title: const Text('心电详情')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _EcgSummaryCard(record: record),
+          const SizedBox(height: 12),
+          _EcgWaveformCard(
+            samples: record.samples,
+            sampleFrequency: record.values['sampleFrequency']?.toInt() ?? 250,
+            calibrated: record.rawVersion >= 2,
+          ),
+          const SizedBox(height: 14),
+          SegmentedButton<int>(
+            segments: const [
+              ButtonSegment(
+                value: 0,
+                icon: Icon(Icons.monitor_heart_outlined),
+                label: Text('测量指标'),
+              ),
+              ButtonSegment(
+                value: 1,
+                icon: Icon(Icons.health_and_safety_outlined),
+                label: Text('风险分析'),
+              ),
+            ],
+            selected: {_section},
+            onSelectionChanged: (value) =>
+                setState(() => _section = value.first),
+          ),
+          const SizedBox(height: 12),
+          if (_section == 0)
+            _EcgMedicalSection(record: record)
+          else
+            _EcgRiskSection(record: record),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                settings: const RouteSettings(name: 'ecg-full-report'),
+                builder: (_) => _EcgFullReportPage(record: record),
+              ),
+            ),
+            icon: const Icon(Icons.description_outlined),
+            label: const Text('查看完整报告'),
+          ),
+          const SizedBox(height: 12),
+          const FeatureStateCard(
+            message: '心电结果仅供健康管理参考',
+            detail: '单次测量会受到佩戴、运动和环境影响，不能代替医疗诊断。如有不适，请及时就医。',
+            icon: Icons.info_outline_rounded,
+            color: SaydianColors.brandRed,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EcgSummaryCard extends StatelessWidget {
+  const _EcgSummaryCard({required this.record});
+
+  final HealthRecord record;
+
+  @override
+  Widget build(BuildContext context) {
+    final measuredAt = record.measuredAt.toLocal();
+    final date = DateFormat('yyyy-MM-dd HH:mm').format(measuredAt);
+    return Card(
+      color: const Color(0xFF9D1830),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.monitor_heart_rounded, color: Colors.white),
+                SizedBox(width: 8),
+                Text(
+                  '本次心电记录',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(date, style: const TextStyle(color: Color(0xFFEECBD2))),
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                Expanded(
+                  child: _EcgSummaryValue(
+                    label: '心率',
+                    value: _ecgValue(record, const ['meanHeartRate', 'value']),
+                    unit: 'bpm',
+                  ),
+                ),
+                Expanded(
+                  child: _EcgSummaryValue(
+                    label: 'QT',
+                    value: _ecgValue(record, const ['averageTimeInterval']),
+                    unit: 'ms',
+                  ),
+                ),
+                Expanded(
+                  child: _EcgSummaryValue(
+                    label: 'HRV',
+                    value: _ecgValue(record, const ['averageHRV']),
+                    unit: 'ms',
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EcgSummaryValue extends StatelessWidget {
+  const _EcgSummaryValue({
+    required this.label,
+    required this.value,
+    required this.unit,
+  });
+
+  final String label;
+  final num? value;
+  final String unit;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    children: [
+      Text(label, style: const TextStyle(color: Color(0xFFEECBD2))),
+      const SizedBox(height: 4),
+      Text(
+        value == null ? '--' : _formatEcgNumber(value!),
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 24,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+      Text(
+        unit,
+        style: const TextStyle(color: Color(0xFFEECBD2), fontSize: 12),
+      ),
+    ],
+  );
+}
+
+class _EcgMedicalSection extends StatelessWidget {
+  const _EcgMedicalSection({required this.record});
+
+  final HealthRecord record;
+
+  @override
+  Widget build(BuildContext context) {
+    const definitions = <(String, String, String)>[
+      ('meanHeartRate', '平均心率', 'bpm'),
+      ('averageHRV', '心率变异性 HRV', 'ms'),
+      ('averageTimeInterval', 'QT 间期', 'ms'),
+      ('respiratoryRate', '呼吸频率', '次/分'),
+      ('sdnn', 'SDNN', 'ms'),
+      ('rmssd', 'RMSSD', 'ms'),
+      ('qrsTime', 'QRS 时限', 'ms'),
+      ('qrsAmplitude', 'QRS 振幅', ''),
+      ('stAmplitude', 'ST 振幅', ''),
+      ('pulseWaveVelocity', '脉搏波速度', ''),
+    ];
+    final values = definitions
+        .where((item) => record.values[item.$1] != null)
+        .toList(growable: false);
+    if (values.isEmpty) {
+      return const FeatureStateCard(
+        message: '本次仅返回基础心电数据',
+        detail: '不同型号手表返回的医学指标数量不同，未返回的指标不会推算或补造。',
+        icon: Icons.monitor_heart_outlined,
+      );
+    }
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '测量指标',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 12),
+            GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                mainAxisExtent: 82,
+              ),
+              itemCount: values.length,
+              itemBuilder: (context, index) {
+                final item = values[index];
+                final value = record.values[item.$1]!;
+                return DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF7F7F8),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          item.$2,
+                          style: const TextStyle(color: SaydianColors.muted),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${_formatEcgNumber(value)} ${item.$3}'.trim(),
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EcgRiskSection extends StatelessWidget {
+  const _EcgRiskSection({required this.record});
+
+  final HealthRecord record;
+
+  @override
+  Widget build(BuildContext context) {
+    const definitions = <(String, String)>[
+      ('diseaseRisk', '综合异常风险'),
+      ('myocarditisRisk', '心肌健康风险'),
+      ('chdRisk', '冠心病相关风险'),
+      ('angioscleroticRisk', '血管硬化相关风险'),
+      ('pressureIndex', '压力指数'),
+      ('fatigueIndex', '疲劳指数'),
+      ('deviceAbnormalFlags', '设备识别异常项'),
+    ];
+    final values = definitions
+        .where((item) => record.values[item.$1] != null)
+        .toList(growable: false);
+    if (values.isEmpty) {
+      return const FeatureStateCard(
+        message: '本次手表未返回风险指标',
+        detail: '风险分析只展示设备实际返回的数据，不根据单次波形自行诊断。',
+        icon: Icons.health_and_safety_outlined,
+      );
+    }
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '风险分析',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              '以下数值来自手表算法，仅作健康趋势参考。',
+              style: TextStyle(color: SaydianColors.muted, height: 1.45),
+            ),
+            const SizedBox(height: 12),
+            for (var index = 0; index < values.length; index++) ...[
+              _EcgRiskRow(
+                label: values[index].$2,
+                value: record.values[values[index].$1]!,
+              ),
+              if (index != values.length - 1) const Divider(height: 22),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EcgRiskRow extends StatelessWidget {
+  const _EcgRiskRow({required this.label, required this.value});
+
+  final String label;
+  final num value;
+
+  @override
+  Widget build(BuildContext context) {
+    final normalized = value >= 0 && value <= 100 ? value / 100 : null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+            Text(
+              _formatEcgNumber(value),
+              style: const TextStyle(
+                color: SaydianColors.brandRed,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+        if (normalized != null) ...[
+          const SizedBox(height: 7),
+          LinearProgressIndicator(
+            value: normalized.toDouble(),
+            minHeight: 7,
+            borderRadius: BorderRadius.circular(8),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _EcgFullReportPage extends StatefulWidget {
+  const _EcgFullReportPage({required this.record});
+
+  final HealthRecord record;
+
+  @override
+  State<_EcgFullReportPage> createState() => _EcgFullReportPageState();
+}
+
+class _EcgFullReportPageState extends State<_EcgFullReportPage> {
+  static const _channel = MethodChannel('cc.saidian/wearable_methods');
+  final _reportKey = GlobalKey();
+  bool _saving = false;
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      final boundary =
+          _reportKey.currentContext?.findRenderObject()
+              as RenderRepaintBoundary?;
+      if (boundary == null) throw StateError('report boundary unavailable');
+      final image = await boundary.toImage(pixelRatio: 2);
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (data == null) throw StateError('report encoding failed');
+      final stamp = DateFormat('yyyyMMdd-HHmmss').format(DateTime.now());
+      await _channel.invokeMethod<Object?>('saveReportImage', {
+        'bytes': data.buffer.asUint8List(),
+        'fileName': 'saidian-ecg-report-$stamp.png',
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('心电报告已保存到手机相册')));
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('报告保存失败，请稍后重试')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('心电健康报告')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: RepaintBoundary(
+          key: _reportKey,
+          child: ColoredBox(
+            color: const Color(0xFFF6F6F7),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    '赛电 · 心电健康报告',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+                  ),
+                  const SizedBox(height: 14),
+                  _EcgSummaryCard(record: widget.record),
+                  const SizedBox(height: 12),
+                  _EcgWaveformCard(
+                    samples: widget.record.samples,
+                    sampleFrequency:
+                        widget.record.values['sampleFrequency']?.toInt() ?? 250,
+                    calibrated: widget.record.rawVersion >= 2,
+                  ),
+                  const SizedBox(height: 12),
+                  _EcgMedicalSection(record: widget.record),
+                  const SizedBox(height: 12),
+                  _EcgRiskSection(record: widget.record),
+                  const SizedBox(height: 12),
+                  const Text(
+                    '说明：本报告由手表测量数据生成，仅供健康管理参考，不能替代医生诊断。',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: SaydianColors.muted, height: 1.5),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+      bottomNavigationBar: SafeArea(
+        minimum: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+        child: FilledButton.icon(
+          onPressed: _saving ? null : _save,
+          icon: _saving
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.download_rounded),
+          label: Text(_saving ? '正在保存报告' : '保存报告图片'),
+        ),
+      ),
+    );
+  }
+}
+
+num? _ecgValue(HealthRecord record, List<String> keys) {
+  for (final key in keys) {
+    final value = record.values[key];
+    if (value != null) return value;
+  }
+  return null;
+}
+
+String _formatEcgNumber(num value) => value == value.round()
+    ? value.toInt().toString()
+    : value
+          .toStringAsFixed(2)
+          .replaceFirst(RegExp(r'0+$'), '')
+          .replaceFirst(RegExp(r'\.$'), '');
 
 class DeviceFeaturePage extends StatefulWidget {
   const DeviceFeaturePage({
@@ -2594,24 +3078,10 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            if (contacts[index]['supportsEmergency'] == true)
-                              IconButton(
-                                onPressed: busy
-                                    ? null
-                                    : () => _toggleEmergencyContact(
-                                        contacts[index],
-                                      ),
-                                tooltip: contacts[index]['isEmergency'] == true
-                                    ? '取消紧急联系人'
-                                    : '设为紧急联系人',
-                                icon: Icon(
-                                  contacts[index]['isEmergency'] == true
-                                      ? Icons.star_rounded
-                                      : Icons.star_border_rounded,
-                                  color: contacts[index]['isEmergency'] == true
-                                      ? SaydianColors.orange
-                                      : null,
-                                ),
+                            if (contacts[index]['isEmergency'] == true)
+                              const Padding(
+                                padding: EdgeInsets.only(right: 6),
+                                child: Chip(label: Text('当前 SOS')),
                               ),
                             IconButton(
                               onPressed: busy
@@ -2679,29 +3149,97 @@ class _DeviceFeaturePageState extends State<DeviceFeaturePage>
       ).showSnackBar(const SnackBar(content: Text('当前手表联系人协议不支持 SOS 设置')));
       return;
     }
-    final selected = await showDialog<Map<String, Object?>>(
+    Map<String, Object?>? picked = supported.firstWhere(
+      (contact) => contact['isEmergency'] == true,
+      orElse: () => supported.first,
+    );
+    final selected = await showModalBottomSheet<Map<String, Object?>>(
       context: context,
-      builder: (dialogContext) => SimpleDialog(
-        title: const Text('选择 SOS 紧急联系人'),
-        children: [
-          for (final contact in supported)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(dialogContext, contact),
-              child: ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(
-                  contact['isEmergency'] == true
-                      ? Icons.star_rounded
-                      : Icons.person_outline_rounded,
-                  color: contact['isEmergency'] == true
-                      ? SaydianColors.orange
-                      : null,
-                ),
-                title: Text('${contact['name'] ?? ''}'),
-                subtitle: Text('${contact['phone'] ?? ''}'),
-              ),
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              20,
+              4,
+              20,
+              20 + MediaQuery.viewInsetsOf(context).bottom,
             ),
-        ],
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  '选择 SOS 紧急联系人',
+                  style: TextStyle(fontSize: 21, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  '手表触发 SOS 后，会优先联系这里选择的人。建议选择最常联系的家人。',
+                  style: TextStyle(color: SaydianColors.muted, height: 1.5),
+                ),
+                const SizedBox(height: 16),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 360),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: supported.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final contact = supported[index];
+                      final chosen = identical(picked, contact);
+                      return Material(
+                        color: chosen
+                            ? SaydianColors.brandRedSoft
+                            : const Color(0xFFF7F7F8),
+                        shape: RoundedRectangleBorder(
+                          side: BorderSide(
+                            color: chosen
+                                ? SaydianColors.brandRed
+                                : const Color(0xFFE4E4E7),
+                          ),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: ListTile(
+                          onTap: () => setSheetState(() => picked = contact),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 4,
+                          ),
+                          leading: CircleAvatar(
+                            child: Text(_contactInitial(contact)),
+                          ),
+                          title: Text(
+                            '${contact['name'] ?? ''}',
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                          subtitle: Text('${contact['phone'] ?? ''}'),
+                          trailing: Icon(
+                            chosen
+                                ? Icons.radio_button_checked_rounded
+                                : Icons.radio_button_unchecked_rounded,
+                            color: chosen
+                                ? SaydianColors.brandRed
+                                : SaydianColors.muted,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: picked == null
+                      ? null
+                      : () => Navigator.pop(sheetContext, picked),
+                  icon: const Icon(Icons.sos_rounded),
+                  label: const Text('确认设为 SOS 联系人'),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
     if (selected != null && selected['isEmergency'] != true) {
@@ -3126,7 +3664,7 @@ class _WatchFaceThumbnail extends StatelessWidget {
     return Semantics(
       image: true,
       label: source == null
-          ? '${face['name'] ?? '表盘'}示意缩图'
+          ? '${face['name'] ?? '表盘'}预览暂不可用'
           : '${face['name'] ?? '表盘'}缩略图',
       child: Container(
         width: 62,
@@ -3146,6 +3684,7 @@ class _WatchFaceThumbnail extends StatelessWidget {
     for (final key in const [
       'thumbnail',
       'thumbnailUrl',
+      'previewPath',
       'preview',
       'previewUrl',
       'image',
@@ -3159,109 +3698,12 @@ class _WatchFaceThumbnail extends StatelessWidget {
     return null;
   }
 
-  Widget get _fallback => Stack(
-    fit: StackFit.expand,
-    children: [
-      CustomPaint(
-        painter: _WatchFacePreviewPainter(
-          index: (face['index'] as num?)?.toInt() ?? fallbackIndex,
-          type: '${face['type'] ?? ''}',
-        ),
-      ),
-      const Positioned(
-        right: 3,
-        bottom: 3,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: Color(0x99000000),
-            borderRadius: BorderRadius.all(Radius.circular(4)),
-          ),
-          child: Padding(
-            padding: EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-            child: Text(
-              '示意',
-              style: TextStyle(color: Colors.white, fontSize: 7),
-            ),
-          ),
-        ),
-      ),
-    ],
+  Widget get _fallback => const ColoredBox(
+    color: Color(0xFF111827),
+    child: Center(
+      child: Icon(Icons.watch_rounded, color: Colors.white70, size: 30),
+    ),
   );
-}
-
-class _WatchFacePreviewPainter extends CustomPainter {
-  const _WatchFacePreviewPainter({required this.index, required this.type});
-
-  final int index;
-  final String type;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final palettes = <List<Color>>[
-      const [Color(0xFF071B33), Color(0xFF1F87FF)],
-      const [Color(0xFF251135), Color(0xFFB55CFF)],
-      const [Color(0xFF062A26), Color(0xFF2DD4BF)],
-      const [Color(0xFF3B160D), Color(0xFFFF8A4C)],
-    ];
-    final palette = palettes[index.abs() % palettes.length];
-    final rect = Offset.zero & size;
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: palette,
-        ).createShader(rect),
-    );
-    final center = Offset(size.width / 2, size.height / 2);
-    if (type == 'photo') {
-      canvas.drawCircle(
-        center,
-        size.shortestSide * .27,
-        Paint()..color = Colors.white.withValues(alpha: .18),
-      );
-      _text(canvas, size, 'PHOTO', 7, size.height * .67, .7);
-      return;
-    }
-    _text(canvas, size, '${10 + index % 3}:28', 17, size.height * .27, 1);
-    _text(canvas, size, 'AUG 14', 7, size.height * .60, .78);
-    canvas.drawLine(
-      Offset(size.width * .22, size.height * .78),
-      Offset(size.width * .78, size.height * .78),
-      Paint()
-        ..color = Colors.white.withValues(alpha: .7)
-        ..strokeWidth = 2
-        ..strokeCap = StrokeCap.round,
-    );
-  }
-
-  void _text(
-    Canvas canvas,
-    Size size,
-    String value,
-    double fontSize,
-    double y,
-    double opacity,
-  ) {
-    final painter = TextPainter(
-      text: TextSpan(
-        text: value,
-        style: TextStyle(
-          color: Colors.white.withValues(alpha: opacity),
-          fontSize: fontSize,
-          fontWeight: FontWeight.w800,
-          letterSpacing: .4,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    painter.paint(canvas, Offset((size.width - painter.width) / 2, y));
-  }
-
-  @override
-  bool shouldRepaint(_WatchFacePreviewPainter oldDelegate) =>
-      oldDelegate.index != index || oldDelegate.type != type;
 }
 
 class _DeviceFeatureHeader extends StatelessWidget {

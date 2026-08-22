@@ -79,26 +79,37 @@ class DeviceWatchFaceMarketProfile {
         (value[key] as num?)?.toInt() ??
         int.tryParse('${value[key] ?? ''}') ??
         fallback;
-    final testVersion = '${value['deviceTestVersion'] ?? ''}'.trim();
+    const catalogue = DeviceWatchFaceMarketProfile.w9s;
+    final screenWidth = number('screenWidth', catalogue.screenWidth);
+    final screenHeight = number('screenHeight', catalogue.screenHeight);
+    final reportedDialShape = number('dialShape', catalogue.dialShape);
+    // The SDK has multiple custom-UI variants for the same physical panel
+    // (for example standard/Apple/Earth/Aurora 410x502). Veepoo's online
+    // catalogue groups all of them under the base display code 58.
+    final catalogueDialShape = screenWidth == 410 && screenHeight == 502
+        ? 58
+        : reportedDialShape;
     return DeviceWatchFaceMarketProfile(
-      dialShape: number('dialShape', 56),
-      binProtocol: number('binProtocol', 2),
-      maxLength: number('maxLength', 614733),
-      deviceNumber: number('deviceNumber', 6702),
-      deviceTestVersion: testVersion.isEmpty ? '11.95.01.00' : testVersion,
-      screenWidth: number('screenWidth', 240),
-      screenHeight: number('screenHeight', 296),
+      dialShape: catalogueDialShape,
+      binProtocol: catalogue.binProtocol,
+      maxLength: catalogue.maxLength,
+      deviceNumber: catalogue.deviceNumber,
+      deviceTestVersion: catalogue.deviceTestVersion,
+      screenWidth: screenWidth,
+      screenHeight: screenHeight,
     );
   }
 
+  /// Safe fallback for the currently supplied W9S hardware. The connected
+  /// device profile returned by the SDK always takes precedence.
   static const w9s = DeviceWatchFaceMarketProfile(
-    dialShape: 56,
+    dialShape: 58,
     binProtocol: 2,
     maxLength: 614733,
     deviceNumber: 6702,
     deviceTestVersion: '11.95.01.00',
-    screenWidth: 240,
-    screenHeight: 296,
+    screenWidth: 410,
+    screenHeight: 502,
   );
 
   final int dialShape;
@@ -110,11 +121,13 @@ class DeviceWatchFaceMarketProfile {
   final int screenHeight;
 }
 
-/// Loads the W9S online watch-face catalogue used by the supplied mini-program.
+/// Loads the Veepoo/JL online watch-face catalogue.
 ///
-/// The values below are the device profile passed by the original
-/// `veepooGetNetworDialManager` implementation for this W9S/JL platform. They
-/// describe the dial binary protocol, not the connected watch's BLE firmware.
+/// Veepoo's catalogue endpoint expects the binary compatibility profile used
+/// by its network-dial manager. It is not the same as the values reported by
+/// `PwdData` for the connected watch. The display type and pixel dimensions
+/// are read from the watch at runtime; the remaining fields intentionally use
+/// the vendor catalogue profile above.
 class DeviceWatchFaceMarketService {
   DeviceWatchFaceMarketService({http.Client? client})
     : _client = client ?? http.Client();

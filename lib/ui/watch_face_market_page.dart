@@ -32,8 +32,10 @@ class _DeviceWatchFaceMarketPageState extends State<DeviceWatchFaceMarketPage> {
   int _total = 0;
   bool _loading = false;
   DeviceWatchFaceMarketItem? _installing;
+  DeviceWatchFaceMarketItem? _lastFailedInstall;
   double _downloadProgress = 0;
   String? _error;
+  String? _installError;
 
   @override
   void initState() {
@@ -99,6 +101,8 @@ class _DeviceWatchFaceMarketPageState extends State<DeviceWatchFaceMarketPage> {
     setState(() {
       _installing = item;
       _downloadProgress = 0;
+      _installError = null;
+      _lastFailedInstall = null;
     });
     try {
       final filePath = await _service.download(
@@ -115,26 +119,39 @@ class _DeviceWatchFaceMarketPageState extends State<DeviceWatchFaceMarketPage> {
             'screenWidth': widget.profile.screenWidth,
             'screenHeight': widget.profile.screenHeight,
             'dialShape': widget.profile.dialShape,
+            'maxLength': widget.profile.maxLength,
           });
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            saved ? '表盘已传送并设置完成' : widget.controller.errorMessage ?? '表盘设置失败',
-          ),
-        ),
-      );
+      final resultMessage = saved
+          ? '表盘已传送并设置完成'
+          : widget.controller.errorMessage ?? '表盘设置失败，请稍后重试';
+      setState(() {
+        _installError = saved ? null : resultMessage;
+        _lastFailedInstall = saved ? null : item;
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(resultMessage)));
     } on DeviceWatchFaceMarketException catch (error) {
       if (mounted) {
+        setState(() {
+          _installError = error.message;
+          _lastFailedInstall = item;
+        });
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(error.message)));
       }
     } catch (_) {
       if (mounted) {
+        const message = '表盘设置失败，请稍后重试';
+        setState(() {
+          _installError = message;
+          _lastFailedInstall = item;
+        });
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('表盘设置失败，请稍后重试')));
+        ).showSnackBar(const SnackBar(content: Text(message)));
       }
     } finally {
       if (mounted) setState(() => _installing = null);
@@ -174,6 +191,54 @@ class _DeviceWatchFaceMarketPageState extends State<DeviceWatchFaceMarketPage> {
                 ),
               ),
             ),
+            if (_installError case final message?)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: SaydianColors.brandRedSoft,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: SaydianColors.brandRed.withValues(alpha: .22),
+                      ),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(
+                            Icons.info_outline_rounded,
+                            color: SaydianColors.brandRed,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  '表盘未设置成功',
+                                  style: TextStyle(fontWeight: FontWeight.w800),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(message),
+                              ],
+                            ),
+                          ),
+                          if (_lastFailedInstall case final failed?)
+                            TextButton(
+                              onPressed: _installing == null
+                                  ? () => _install(failed)
+                                  : null,
+                              child: const Text('重试'),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             if (_items.isEmpty && _loading)
               const SliverFillRemaining(
                 child: Center(child: CircularProgressIndicator()),
@@ -249,7 +314,7 @@ class _DeviceWatchFaceMarketPageState extends State<DeviceWatchFaceMarketPage> {
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   Text(
-                                    item.name,
+                                    _displayName(item, index),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
@@ -312,5 +377,15 @@ class _DeviceWatchFaceMarketPageState extends State<DeviceWatchFaceMarketPage> {
         ),
       ),
     );
+  }
+
+  String _displayName(DeviceWatchFaceMarketItem item, int index) {
+    final raw = item.name.trim();
+    final isProtocolCode =
+        raw.length <= 32 &&
+        !RegExp(r'[\s\u4e00-\u9fff]').hasMatch(raw) &&
+        RegExp(r'[A-Za-z]').hasMatch(raw) &&
+        RegExp(r'\d').hasMatch(raw);
+    return raw.isEmpty || isProtocolCode ? '精选表盘 ${index + 1}' : raw;
   }
 }

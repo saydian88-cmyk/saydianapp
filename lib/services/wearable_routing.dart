@@ -47,6 +47,7 @@ class RoutedDevice {
     String? serialNumber,
     String? hardwareAddress,
     String? firmwareVersion,
+    int? batteryPercent,
     int? rssi,
   }) => RoutedDevice(
     display: DeviceInfo(
@@ -56,6 +57,7 @@ class RoutedDevice {
       serialNumber: serialNumber,
       hardwareAddress: hardwareAddress,
       firmwareVersion: firmwareVersion,
+      batteryPercent: batteryPercent,
       rssi: rssi,
     ),
     transport: transport,
@@ -73,6 +75,7 @@ class RoutedDevice {
     serialNumber: device.serialNumber,
     hardwareAddress: device.hardwareAddress,
     firmwareVersion: device.firmwareVersion,
+    batteryPercent: device.batteryPercent,
     rssi: device.rssi,
   );
 
@@ -83,7 +86,10 @@ class RoutedDevice {
 }
 
 class RoutedWearableBridge
-    implements WearableBridge, WearableDeviceDetailsBridge {
+    implements
+        WearableBridge,
+        WearableDeviceDetailsBridge,
+        WearableWatchFaceProfileBridge {
   RoutedWearableBridge({
     required WearableBridge veepoo,
     required WearableBridge yucheng,
@@ -235,6 +241,13 @@ class RoutedWearableBridge
   }
 
   @override
+  Future<Map<String, Object?>> getWatchFaceProfile() async {
+    final bridge = _activeBridge;
+    if (bridge is! WearableWatchFaceProfileBridge) return const {};
+    return (bridge as WearableWatchFaceProfileBridge).getWatchFaceProfile();
+  }
+
+  @override
   Future<DeviceCapabilities> getCapabilities() =>
       _activeBridge.getCapabilities();
 
@@ -321,6 +334,10 @@ class RoutedWearableBridge
         return;
       }
       final routed = RoutedDevice.fromDevice(transport, device);
+      // A user can tap a device as soon as it appears. Keep the routing table
+      // in sync with live discovery events instead of waiting for the native
+      // scan Future to finish.
+      _scanned[routed.display.id] = routed;
       _eventController.add(
         WearableEvent(type: event.type, payload: routed.display.toJson()),
       );

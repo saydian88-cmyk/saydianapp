@@ -166,6 +166,28 @@ void main() {
   });
 
   test(
+    'can connect a live scan result before the scan future completes',
+    () async {
+      final veepoo = _FakeWearableBridge(scanned: const []);
+      final bridge = RoutedWearableBridge(
+        veepoo: veepoo,
+        yucheng: _FakeWearableBridge(scanned: const []),
+      );
+      final subscription = bridge.events.listen((_) {});
+
+      veepoo.emitScan(
+        const DeviceInfo(id: '38:23:A4:5E:CA:69', name: 'SD-watch-W9S'),
+      );
+      await pumpEventQueue();
+      await bridge.connect('veepoo:38:23:A4:5E:CA:69', profile: _profile);
+
+      expect(veepoo.connectCalls, ['38:23:A4:5E:CA:69']);
+      await subscription.cancel();
+      await bridge.dispose();
+    },
+  );
+
+  test(
     'discovers suffixed W8S through Yucheng and hides the Veepoo duplicate',
     () async {
       final bridge = RoutedWearableBridge(

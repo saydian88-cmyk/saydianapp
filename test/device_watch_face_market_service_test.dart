@@ -5,6 +5,29 @@ import 'package:saydian_app/services/device_watch_face_market_service.dart';
 
 void main() {
   test(
+    'keeps the vendor catalogue protocol with a runtime display profile',
+    () {
+      final profile = DeviceWatchFaceMarketProfile.fromMap({
+        'dialShape': 126,
+        'screenWidth': 410,
+        'screenHeight': 502,
+        'binProtocol': 99,
+        'maxLength': 1,
+        'deviceNumber': 1,
+        'deviceTestVersion': 'device-firmware',
+      });
+
+      expect(profile.dialShape, 58);
+      expect(profile.screenWidth, 410);
+      expect(profile.screenHeight, 502);
+      expect(profile.binProtocol, 2);
+      expect(profile.maxLength, 614733);
+      expect(profile.deviceNumber, 6702);
+      expect(profile.deviceTestVersion, '11.95.01.00');
+    },
+  );
+
+  test(
     'loads the W9S market profile and parses available watch faces',
     () async {
       late Uri requested;
@@ -40,7 +63,7 @@ void main() {
       final result = await service.loadPage();
 
       expect(requested.host, 'www.vphband.com');
-      expect(requested.queryParameters['dialShape'], '56');
+      expect(requested.queryParameters['dialShape'], '58');
       expect(requested.queryParameters['binProtocol'], '2');
       expect(requested.queryParameters['deviceNumber'], '6702');
       expect(requested.queryParameters['deviceVersion'], '11.95.01.00');

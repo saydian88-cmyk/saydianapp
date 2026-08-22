@@ -13,12 +13,14 @@ import '../domain/ecg_waveform.dart';
 import '../domain/health_interpretation.dart';
 import '../domain/models.dart';
 import '../services/app_controller.dart';
+import '../services/device_watch_face_market_service.dart';
 import 'app_theme.dart';
 import 'brand_assets.dart';
 import 'device_sdk_badge.dart';
 import 'health_trend_page.dart';
 import 'prototype_pages.dart';
 import 'shop_pages.dart';
+import 'watch_face_market_page.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({required this.controller, super.key});
@@ -1506,8 +1508,15 @@ class _HealthMeasurementDialogState extends State<_HealthMeasurementDialog> {
     setState(() => _stopping = true);
     final record = widget.controller.latestByMetric[widget.metric];
     final completed = record != null && record.measuredAt.isAfter(_startedAt);
-    if (!completed) await widget.controller.stopMeasurement(widget.metric);
+    if (completed) {
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
+    // A few vendor firmwares do not acknowledge a stop command promptly.
+    // Close the dialog first so the user never gets trapped on a spinner;
+    // AppController still performs the bounded stop in the background.
     if (mounted) Navigator.of(context).pop();
+    await widget.controller.stopMeasurement(widget.metric);
   }
 
   Future<void> _retry() async {
@@ -3371,13 +3380,16 @@ class DevicePage extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFFFFF6F3), Color(0xFFFFF9E9)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              border: Border.all(color: const Color(0x33D20B27)),
-              borderRadius: BorderRadius.circular(20),
+              color: Colors.white,
+              border: Border.all(color: const Color(0xFFE8E8EA)),
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x0D000000),
+                  blurRadius: 18,
+                  offset: Offset(0, 6),
+                ),
+              ],
             ),
             child: Column(
               children: [
@@ -3387,19 +3399,12 @@ class DevicePage extends StatelessWidget {
                       width: 56,
                       height: 56,
                       decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(18),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Color(0x16000000),
-                            blurRadius: 12,
-                            offset: Offset(0, 4),
-                          ),
-                        ],
+                        color: const Color(0xFF171B2B),
+                        shape: BoxShape.circle,
                       ),
                       child: const Icon(
                         Icons.watch_rounded,
-                        color: SaydianColors.brandRed,
+                        color: Colors.white,
                         size: 34,
                       ),
                     ),
@@ -3419,36 +3424,30 @@ class DevicePage extends StatelessWidget {
                                   ),
                                 ),
                               ),
-                              DeviceSdkBadge(
-                                source: connected.sdkSource,
-                                compact: true,
-                              ),
+                              _BatteryBadge(value: connected.batteryPercent),
                             ],
                           ),
                           const SizedBox(height: 5),
                           Text(
-                            _deviceSummary(connected),
+                            connected.identifierLabel,
                             style: const TextStyle(
                               color: SaydianColors.muted,
-                              fontSize: 12,
+                              fontSize: 13,
                             ),
                           ),
                           const SizedBox(height: 5),
-                          _ConnectionBadge(
-                            label: _deviceStateLabel(controller.deviceState),
-                          ),
-                          const SizedBox(height: 5),
                           Wrap(
-                            spacing: 7,
-                            runSpacing: 1,
+                            spacing: 8,
+                            runSpacing: 6,
                             children: [
-                              Text(
-                                '设备同步：${controller.syncStatus}',
-                                style: const TextStyle(
-                                  color: SaydianColors.muted,
-                                  fontSize: 11.5,
-                                  height: 1.3,
+                              _ConnectionBadge(
+                                label: _deviceStateLabel(
+                                  controller.deviceState,
                                 ),
+                              ),
+                              DeviceSdkBadge(
+                                source: connected.sdkSource,
+                                compact: true,
                               ),
                             ],
                           ),
@@ -3475,7 +3474,9 @@ class DevicePage extends StatelessWidget {
                             : const Icon(Icons.sync_rounded),
                         label: Text(
                           controller.isDeviceSyncing
-                              ? '同步中 ${(controller.deviceSyncProgress * 100).round()}%'
+                              ? controller.deviceSyncProgress <= 0.1
+                                    ? '正在读取数据'
+                                    : '同步中 ${(controller.deviceSyncProgress * 100).round()}%'
                               : '同步数据',
                         ),
                         style: FilledButton.styleFrom(
@@ -3554,19 +3555,25 @@ class DevicePage extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 18),
+        if (connected != null) ...[
+          _DeviceWatchFaceMarketStrip(controller: controller),
+          const SizedBox(height: 18),
+        ],
         const Text(
-          '表盘',
+          '表盘与个性化',
           style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 10),
-        Card(
-          child: Column(
-            children: [
-              _deviceFeatureTile(context, DeviceFeature.watchFaces),
-              const Divider(indent: 56),
-              _deviceFeatureTile(context, DeviceFeature.photoWatchFace),
-            ],
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: _deviceFeatureCard(context, DeviceFeature.watchFaces),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _deviceFeatureCard(context, DeviceFeature.photoWatchFace),
+            ),
+          ],
         ),
         const SizedBox(height: 18),
         const Text(
@@ -3574,16 +3581,18 @@ class DevicePage extends StatelessWidget {
           style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 10),
-        Card(
-          child: Column(
-            children: [
-              for (var index = 0; index < _primaryFeatures.length; index++) ...[
-                _deviceFeatureTile(context, _primaryFeatures[index]),
-                if (index != _primaryFeatures.length - 1)
-                  const Divider(indent: 56),
-              ],
-            ],
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            mainAxisSpacing: 12,
+            crossAxisSpacing: 12,
+            mainAxisExtent: 104,
           ),
+          itemCount: _primaryFeatures.length,
+          itemBuilder: (context, index) =>
+              _deviceFeatureCard(context, _primaryFeatures[index]),
         ),
         const SizedBox(height: 12),
         Card(
@@ -3651,61 +3660,118 @@ class DevicePage extends StatelessWidget {
     DeviceFeature.screenDisplay,
   ];
 
-  Widget _deviceFeatureTile(BuildContext context, DeviceFeature feature) {
+  Widget _deviceFeatureCard(BuildContext context, DeviceFeature feature) {
     final availability = controller.availabilityFor(feature);
-    final icon = switch (feature) {
-      DeviceFeature.watchFaces => Icons.watch_later_outlined,
-      DeviceFeature.photoWatchFace => Icons.photo_outlined,
-      DeviceFeature.findWatch => Icons.notifications_active_outlined,
-      DeviceFeature.camera => Icons.camera_alt_outlined,
-      DeviceFeature.phoneCalls => Icons.call_outlined,
-      DeviceFeature.contacts => Icons.contacts_outlined,
-      DeviceFeature.notifications => Icons.notifications_none_rounded,
-      DeviceFeature.alarms => Icons.alarm_rounded,
-      DeviceFeature.weather => Icons.cloud_outlined,
-      DeviceFeature.worldClock => Icons.public_rounded,
-      DeviceFeature.healthReminders => Icons.event_available_outlined,
-      DeviceFeature.healthMonitoring => Icons.monitor_heart_outlined,
-      DeviceFeature.healthAssessment => Icons.assignment_turned_in_outlined,
-      DeviceFeature.screenDisplay => Icons.brightness_6_outlined,
-    };
-    return ListTile(
-      onTap: () {
-        if (feature == DeviceFeature.healthMonitoring) {
-          Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              settings: const RouteSettings(name: 'device-health-monitoring'),
-              builder: (_) => PermissionManagementPage(
-                controller: controller,
-                healthOnly: true,
+    return Material(
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
+        side: const BorderSide(color: Color(0xFFE9E9EC)),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => _openDeviceFeature(context, feature),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: _featureColor(feature).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Icon(
+                  _featureIcon(feature),
+                  color: _featureColor(feature),
+                  size: 24,
+                ),
               ),
-            ),
-          );
-          return;
-        }
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            settings: RouteSettings(name: 'device-${feature.wireName}'),
-            builder: (_) =>
-                DeviceFeaturePage(controller: controller, feature: feature),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      feature.label,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      availability.isReady ? '点击进入' : availability.message,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: SaydianColors.muted,
+                        fontSize: 12,
+                        height: 1.25,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-        );
-      },
-      leading: Icon(icon),
-      title: Text(feature.label),
-      subtitle: Text(availability.message),
-      trailing: const Icon(Icons.chevron_right_rounded),
+        ),
+      ),
     );
   }
 
-  String _deviceSummary(DeviceInfo device) {
-    final values = <String>[
-      if (device.model?.trim().isNotEmpty ?? false) device.model!.trim(),
-      if (device.firmwareVersion?.trim().isNotEmpty ?? false)
-        '版本 ${device.firmwareVersion!.trim()}',
-    ];
-    return values.isEmpty ? '手表已连接' : values.join(' · ');
+  void _openDeviceFeature(BuildContext context, DeviceFeature feature) {
+    if (feature == DeviceFeature.healthMonitoring) {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          settings: const RouteSettings(name: 'device-health-monitoring'),
+          builder: (_) => PermissionManagementPage(
+            controller: controller,
+            healthOnly: true,
+          ),
+        ),
+      );
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        settings: RouteSettings(name: 'device-${feature.wireName}'),
+        builder: (_) =>
+            DeviceFeaturePage(controller: controller, feature: feature),
+      ),
+    );
   }
+
+  IconData _featureIcon(DeviceFeature feature) => switch (feature) {
+    DeviceFeature.watchFaces => Icons.watch_later_outlined,
+    DeviceFeature.photoWatchFace => Icons.photo_outlined,
+    DeviceFeature.findWatch => Icons.notifications_active_outlined,
+    DeviceFeature.camera => Icons.camera_alt_outlined,
+    DeviceFeature.phoneCalls => Icons.call_outlined,
+    DeviceFeature.contacts => Icons.contacts_outlined,
+    DeviceFeature.notifications => Icons.notifications_none_rounded,
+    DeviceFeature.alarms => Icons.alarm_rounded,
+    DeviceFeature.weather => Icons.cloud_outlined,
+    DeviceFeature.worldClock => Icons.public_rounded,
+    DeviceFeature.healthReminders => Icons.event_available_outlined,
+    DeviceFeature.healthMonitoring => Icons.monitor_heart_outlined,
+    DeviceFeature.healthAssessment => Icons.assignment_turned_in_outlined,
+    DeviceFeature.screenDisplay => Icons.brightness_6_outlined,
+  };
+
+  Color _featureColor(DeviceFeature feature) => switch (feature) {
+    DeviceFeature.findWatch ||
+    DeviceFeature.alarms ||
+    DeviceFeature.healthMonitoring => SaydianColors.brandRed,
+    DeviceFeature.camera ||
+    DeviceFeature.notifications ||
+    DeviceFeature.screenDisplay => SaydianColors.blue,
+    DeviceFeature.phoneCalls ||
+    DeviceFeature.contacts ||
+    DeviceFeature.healthReminders => SaydianColors.green,
+    DeviceFeature.weather ||
+    DeviceFeature.worldClock => const Color(0xFF0EA5E9),
+    _ => SaydianColors.brandGoldDark,
+  };
 
   String _deviceStateLabel(DeviceConnectionState state) => switch (state) {
     DeviceConnectionState.disconnected => '未连接',
@@ -3717,6 +3783,178 @@ class DevicePage extends StatelessWidget {
     DeviceConnectionState.measuring => '测量中',
     DeviceConnectionState.error => '需要处理',
   };
+}
+
+class _BatteryBadge extends StatelessWidget {
+  const _BatteryBadge({required this.value});
+
+  final int? value;
+
+  @override
+  Widget build(BuildContext context) {
+    final percent = value?.clamp(0, 100);
+    final color = switch (percent) {
+      null => SaydianColors.muted,
+      <= 15 => SaydianColors.danger,
+      <= 35 => SaydianColors.orange,
+      _ => SaydianColors.green,
+    };
+    return Semantics(
+      label: percent == null ? '手表电量暂未读取' : '手表电量 $percent%',
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            percent == null ? '--' : '$percent%',
+            style: TextStyle(
+              color: color,
+              fontSize: 14,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Icon(
+            percent == null
+                ? Icons.battery_unknown_rounded
+                : percent <= 15
+                ? Icons.battery_1_bar_rounded
+                : percent <= 50
+                ? Icons.battery_4_bar_rounded
+                : Icons.battery_full_rounded,
+            color: color,
+            size: 22,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DeviceWatchFaceMarketStrip extends StatefulWidget {
+  const _DeviceWatchFaceMarketStrip({required this.controller});
+
+  final AppController controller;
+
+  @override
+  State<_DeviceWatchFaceMarketStrip> createState() =>
+      _DeviceWatchFaceMarketStripState();
+}
+
+class _DeviceWatchFaceMarketStripState
+    extends State<_DeviceWatchFaceMarketStrip> {
+  final _service = DeviceWatchFaceMarketService();
+  List<DeviceWatchFaceMarketItem> _items = const [];
+  DeviceWatchFaceMarketProfile _profile = DeviceWatchFaceMarketProfile.w9s;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    try {
+      final profileData = await widget.controller.readWatchFaceProfile();
+      final profile = profileData.isEmpty
+          ? DeviceWatchFaceMarketProfile.w9s
+          : DeviceWatchFaceMarketProfile.fromMap(profileData);
+      final result = await _service.loadPage(page: 1, profile: profile);
+      if (mounted) {
+        setState(() {
+          _profile = profile;
+          _items = result.items.take(4).toList();
+        });
+      }
+    } catch (_) {
+      // The full market page has an explicit retry state. Keep this compact
+      // preview quiet when the phone is temporarily offline.
+    }
+  }
+
+  void _openMarket() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        settings: const RouteSettings(name: 'device-watch-face-market'),
+        builder: (_) => DeviceWatchFaceMarketPage(
+          controller: widget.controller,
+          profile: _profile,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: _openMarket,
+          child: const Padding(
+            padding: EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '表盘市场',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                Text('查看更多', style: TextStyle(color: SaydianColors.muted)),
+                Icon(Icons.chevron_right_rounded, color: SaydianColors.muted),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 88,
+          child: _items.isEmpty
+              ? Material(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: _openMarket,
+                    child: const Center(child: Text('进入表盘市场选择更多样式')),
+                  ),
+                )
+              : ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _items.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 12),
+                  itemBuilder: (context, index) {
+                    final item = _items[index];
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(18),
+                      onTap: _openMarket,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(18),
+                        child: Image.network(
+                          item.previewUrl.toString(),
+                          width: 88,
+                          height: 88,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => const ColoredBox(
+                            color: Color(0xFF171B2B),
+                            child: SizedBox.square(
+                              dimension: 88,
+                              child: Icon(
+                                Icons.watch_rounded,
+                                color: Colors.white70,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
 }
 
 class DeviceSearchPage extends StatefulWidget {
@@ -5154,22 +5392,14 @@ class SettingsPage extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [
-                  Color(0xFF081322),
-                  Color(0xFF17304B),
-                  Color(0xFF7E1728),
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              border: Border.all(color: const Color(0x55D8B848)),
-              borderRadius: BorderRadius.circular(24),
+              color: const Color(0xFF141A25),
+              border: Border.all(color: const Color(0xFF30394A)),
+              borderRadius: BorderRadius.circular(20),
               boxShadow: const [
                 BoxShadow(
-                  color: Color(0x240E1730),
-                  blurRadius: 24,
-                  offset: Offset(0, 10),
+                  color: Color(0x1F111827),
+                  blurRadius: 18,
+                  offset: Offset(0, 8),
                 ),
               ],
             ),
@@ -5178,12 +5408,9 @@ class SettingsPage extends StatelessWidget {
                 Container(
                   width: 66,
                   height: 66,
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [Color(0xFFE12B43), Color(0xFF9E1025)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
+                  decoration: BoxDecoration(
+                    color: SaydianColors.brandRed,
+                    border: Border.all(color: const Color(0x55FFFFFF)),
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(
@@ -5211,8 +5438,8 @@ class SettingsPage extends StatelessWidget {
                             ? '健康档案仅保存在本机'
                             : 'ID：$memberId',
                         style: const TextStyle(
-                          color: Color(0xFFD9DDEC),
-                          fontSize: 12,
+                          color: Color(0xFFC7CFDC),
+                          fontSize: 14,
                         ),
                       ),
                     ],
@@ -5260,7 +5487,7 @@ class SettingsPage extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         Card(
-          color: const Color(0xFFF8FAFD),
+          color: Colors.white,
           shape: RoundedRectangleBorder(
             side: const BorderSide(color: Color(0x17344B7D)),
             borderRadius: BorderRadius.circular(20),
@@ -5327,9 +5554,9 @@ class SettingsPage extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         Card(
-          color: const Color(0xFFFFFCF7),
+          color: Colors.white,
           shape: RoundedRectangleBorder(
-            side: const BorderSide(color: Color(0x1FD8B848)),
+            side: const BorderSide(color: Color(0xFFE8E8EC)),
             borderRadius: BorderRadius.circular(20),
           ),
           child: Column(
@@ -5373,7 +5600,7 @@ class SettingsPage extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         Card(
-          color: const Color(0xFFF8FAFD),
+          color: Colors.white,
           shape: RoundedRectangleBorder(
             side: const BorderSide(color: Color(0x17344B7D)),
             borderRadius: BorderRadius.circular(20),

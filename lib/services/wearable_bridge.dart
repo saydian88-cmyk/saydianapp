@@ -40,6 +40,13 @@ abstract interface class WearableDeviceDetailsBridge {
   Future<DeviceInfo?> getConnectedDeviceDetails();
 }
 
+/// Optional pull API for the connected watch's online watch-face catalogue
+/// parameters. The values must come from the authenticated device session;
+/// watches sold under the same model name can use different display profiles.
+abstract interface class WearableWatchFaceProfileBridge {
+  Future<Map<String, Object?>> getWatchFaceProfile();
+}
+
 class WearableSdkNotConfigured implements Exception {
   const WearableSdkNotConfigured([this.message = 'Veepoo 合作方 SDK 尚未配置']);
 
@@ -50,7 +57,10 @@ class WearableSdkNotConfigured implements Exception {
 }
 
 class MethodChannelWearableBridge
-    implements WearableBridge, WearableDeviceDetailsBridge {
+    implements
+        WearableBridge,
+        WearableDeviceDetailsBridge,
+        WearableWatchFaceProfileBridge {
   MethodChannelWearableBridge({
     MethodChannel? methods,
     EventChannel? eventChannel,
@@ -107,6 +117,14 @@ class MethodChannelWearableBridge
       'getDeviceDetails',
     );
     return result == null ? null : DeviceInfo.fromMap(result);
+  }
+
+  @override
+  Future<Map<String, Object?>> getWatchFaceProfile() async {
+    final result =
+        await _invokeOperation<Map<Object?, Object?>>('getWatchFaceProfile') ??
+        const <Object?, Object?>{};
+    return result.map((key, value) => MapEntry('$key', value));
   }
 
   @override

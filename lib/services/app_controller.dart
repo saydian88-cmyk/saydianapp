@@ -748,7 +748,7 @@ class AppController extends ChangeNotifier {
 
   Duration _measurementTimeoutFor(HealthMetric metric) => switch (metric) {
     HealthMetric.ecg || HealthMetric.hrv => const Duration(seconds: 120),
-    HealthMetric.bloodPressure ||
+    HealthMetric.bloodPressure => const Duration(seconds: 150),
     HealthMetric.bodyComposition ||
     HealthMetric.bloodComposition => const Duration(seconds: 90),
     _ => const Duration(seconds: 75),
@@ -985,6 +985,20 @@ class AppController extends ChangeNotifier {
       return const {};
     } finally {
       _setDeviceFeatureBusy(feature, false);
+    }
+  }
+
+  Future<Map<String, Object?>> readWatchFaceProfile() async {
+    if (connectedDevice == null) return const {};
+    final bridge = _wearable;
+    if (bridge is! WearableWatchFaceProfileBridge) return const {};
+    try {
+      return await (bridge as WearableWatchFaceProfileBridge)
+          .getWatchFaceProfile();
+    } catch (_) {
+      // The market has a device-family fallback, so a transient profile read
+      // must not block the rest of the device page or show a global error.
+      return const {};
     }
   }
 
@@ -1667,12 +1681,7 @@ class AppController extends ChangeNotifier {
     required String fallback,
   }) {
     final nativeMessage = error.message?.trim();
-    if (_isMeasurementErrorCode(error.code) &&
-        nativeMessage != null &&
-        nativeMessage.isNotEmpty) {
-      return nativeMessage;
-    }
-    return switch (error.code) {
+    final mappedMessage = switch (error.code) {
       'BLUETOOTH_DISABLED' => '请先打开手机蓝牙',
       'BLE_PERMISSION_DENIED' || 'LOCATION_SERVICE_DISABLED' => '允许相关权限后使用',
       'DEVICE_NOT_FOUND' => '手表已离开搜索范围，请重新搜索',
@@ -1687,8 +1696,13 @@ class AppController extends ChangeNotifier {
       'CONNECT_FAILED' || 'CONNECTION_DROPPED' => '连接失败，请确认手表未连接其他手机后重试',
       'YUCHENG_SYNC_TIMEOUT' => '数据同步超时，可稍后重试',
       'NETWORK_ERROR' || 'NETWORK_UNAVAILABLE' => '网络不可用，请检查后重试',
-      _ => fallback,
+      _ => null,
     };
+    if (mappedMessage != null) return mappedMessage;
+    if (nativeMessage != null && nativeMessage.isNotEmpty) {
+      return nativeMessage;
+    }
+    return fallback;
   }
 
   Future<bool> _guard(Future<void> Function() operation) async {
@@ -1895,6 +1909,7 @@ class AppController extends ChangeNotifier {
       firmwareVersion: (firmware?.isNotEmpty ?? false)
           ? firmware
           : device.firmwareVersion,
+      batteryPercent: details.batteryPercent ?? device.batteryPercent,
       rssi: device.rssi ?? details.rssi,
       lastSyncAt: device.lastSyncAt ?? details.lastSyncAt,
     );

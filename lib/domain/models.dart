@@ -141,6 +141,7 @@ class DeviceInfo {
     this.serialNumber,
     this.hardwareAddress,
     this.firmwareVersion,
+    this.batteryPercent,
     this.rssi,
     this.lastSyncAt,
   });
@@ -151,6 +152,7 @@ class DeviceInfo {
   final String? serialNumber;
   final String? hardwareAddress;
   final String? firmwareVersion;
+  final int? batteryPercent;
   final int? rssi;
   final DateTime? lastSyncAt;
 
@@ -161,6 +163,9 @@ class DeviceInfo {
     serialNumber: map['serialNumber']?.toString(),
     hardwareAddress: map['hardwareAddress']?.toString(),
     firmwareVersion: map['firmwareVersion']?.toString(),
+    batteryPercent: map['batteryPercent'] is num
+        ? (map['batteryPercent'] as num).toInt().clamp(0, 100).toInt()
+        : null,
     rssi: map['rssi'] is num ? (map['rssi'] as num).toInt() : null,
     lastSyncAt: DateTime.tryParse('${map['lastSyncAt'] ?? ''}'),
   );
@@ -172,6 +177,7 @@ class DeviceInfo {
     'serialNumber': serialNumber,
     'hardwareAddress': hardwareAddress,
     'firmwareVersion': firmwareVersion,
+    'batteryPercent': batteryPercent,
     'rssi': rssi,
     'lastSyncAt': lastSyncAt?.toUtc().toIso8601String(),
   };
