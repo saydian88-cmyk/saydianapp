@@ -11,6 +11,8 @@ abstract interface class SessionVault {
   Future<void> clearSession();
   Future<HealthWarningSettings> readHealthWarningSettings();
   Future<void> writeHealthWarningSettings(HealthWarningSettings settings);
+  Future<List<Map<String, Object?>>> readShopCart();
+  Future<void> writeShopCart(List<Map<String, Object?>> items);
   Future<String> databaseKey();
 }
 
@@ -21,6 +23,7 @@ class SecureSessionVault implements SessionVault {
   static const _sessionKey = 'saydian.session.v1';
   static const _databaseKey = 'saydian.database.key.v1';
   static const _healthWarningKey = 'saydian.health-warning.v1';
+  static const _shopCartKey = 'saydian.shop-cart.v1';
 
   final FlutterSecureStorage _storage;
 
@@ -70,6 +73,26 @@ class SecureSessionVault implements SessionVault {
       );
 
   @override
+  Future<List<Map<String, Object?>>> readShopCart() async {
+    final raw = await _storage.read(key: _shopCartKey);
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final value = jsonDecode(raw);
+      if (value is! List) return const [];
+      return value
+          .whereType<Map>()
+          .map((item) => item.map((key, value) => MapEntry('$key', value)))
+          .toList(growable: false);
+    } on FormatException {
+      return const [];
+    }
+  }
+
+  @override
+  Future<void> writeShopCart(List<Map<String, Object?>> items) =>
+      _storage.write(key: _shopCartKey, value: jsonEncode(items));
+
+  @override
   Future<String> databaseKey() async {
     final existing = await _storage.read(key: _databaseKey);
     if (existing != null && existing.length >= 24) return existing;
@@ -83,6 +106,7 @@ class MemorySessionVault implements SessionVault {
   Session? session;
   HealthWarningSettings healthWarningSettings = const HealthWarningSettings();
   String key = 'test-database-key-that-is-long-enough';
+  List<Map<String, Object?>> shopCart = const [];
 
   @override
   Future<void> clearSession() async => session = null;
@@ -98,10 +122,17 @@ class MemorySessionVault implements SessionVault {
       healthWarningSettings;
 
   @override
+  Future<List<Map<String, Object?>>> readShopCart() async => shopCart;
+
+  @override
   Future<void> writeSession(Session value) async => session = value;
 
   @override
   Future<void> writeHealthWarningSettings(
     HealthWarningSettings settings,
   ) async => healthWarningSettings = settings;
+
+  @override
+  Future<void> writeShopCart(List<Map<String, Object?>> items) async =>
+      shopCart = items;
 }

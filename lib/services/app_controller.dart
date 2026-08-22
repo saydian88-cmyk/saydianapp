@@ -83,6 +83,7 @@ class AppController extends ChangeNotifier {
   List<Map<String, Object?>> notifications = const [];
   List<Map<String, Object?>> orders = const [];
   List<Map<String, Object?>> addresses = const [];
+  List<Map<String, Object?>> shopCart = const [];
   Map<String, Object?> memberProfile = const {};
   final Map<int, String> _aiSessionIds = {};
   String aiStatus = '等待加载';
@@ -135,6 +136,11 @@ class AppController extends ChangeNotifier {
       healthWarningSettings = await _vault.readHealthWarningSettings();
     } catch (_) {
       healthWarningSettings = const HealthWarningSettings();
+    }
+    try {
+      shopCart = await _vault.readShopCart();
+    } catch (_) {
+      shopCart = const [];
     }
     try {
       session = await _vault.readSession();
@@ -636,7 +642,7 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       return false;
     }
-    if (!(capabilities?.supports(metric) ?? false)) {
+    if (!(capabilities?.supportsManualMeasurement(metric) ?? false)) {
       errorMessage = '当前设备不支持${metric.label}测量';
       notifyListeners();
       return false;
@@ -747,7 +753,8 @@ class AppController extends ChangeNotifier {
   }
 
   Duration _measurementTimeoutFor(HealthMetric metric) => switch (metric) {
-    HealthMetric.ecg || HealthMetric.hrv => const Duration(seconds: 120),
+    HealthMetric.hrv => const Duration(seconds: 180),
+    HealthMetric.ecg => const Duration(seconds: 120),
     HealthMetric.bloodPressure => const Duration(seconds: 150),
     HealthMetric.bodyComposition ||
     HealthMetric.bloodComposition => const Duration(seconds: 90),
@@ -1173,7 +1180,12 @@ class AppController extends ChangeNotifier {
   });
 
   Future<bool> addCare(String mobile) => _guard(() async {
-    await _api.addCare(mobile);
+    final normalized = mobile.trim();
+    final ownMobile = '${memberProfile['mobile'] ?? ''}'.trim();
+    if (ownMobile.isNotEmpty && normalized == ownMobile) {
+      throw const ApiException('不能添加当前登录账号作为关爱成员');
+    }
+    await _api.addCare(normalized);
     careMembers = await _api.getCareMembers();
   });
 
@@ -1499,16 +1511,14 @@ class AppController extends ChangeNotifier {
       _shopMapRequest('商品详情', () => _requiredShopApi.getShopProduct(id));
 
   Future<Map<String, Object?>> previewShopOrder({
-    required int skuId,
-    required int quantity,
+    required List<Map<String, int>> items,
   }) => _shopMapRequest(
     '确认订单',
-    () => _requiredShopApi.previewShopOrder(skuId: skuId, quantity: quantity),
+    () => _requiredShopApi.previewShopOrder(items: items),
   );
 
   Future<Map<String, Object?>> createShopOrder({
-    required int skuId,
-    required int quantity,
+    required List<Map<String, int>> items,
     required int addressId,
     required String buyerMessage,
     required num point,
@@ -1523,8 +1533,7 @@ class AppController extends ChangeNotifier {
     notifyListeners();
     try {
       final order = await _requiredShopApi.createShopOrder(
-        skuId: skuId,
-        quantity: quantity,
+        items: items,
         addressId: addressId,
         buyerMessage: buyerMessage,
         point: point,
@@ -1538,6 +1547,87 @@ class AppController extends ChangeNotifier {
       isBusy = false;
       notifyListeners();
     }
+  }
+
+  Future<bool> confirmOrderReceipt(int orderId) => _guard(() async {
+    if (session == null) throw const ApiException('请先登录后确认收货');
+    await _requiredShopApi.confirmOrderReceipt(orderId);
+    await loadOrders(2);
+  });
+
+  Future<bool> applyOrderRefund({
+    required int orderProductId,
+    required int refundType,
+    required num amount,
+    required String reason,
+  }) => _guard(() async {
+    if (session == null) throw const ApiException('请先登录后申请售后');
+    if (reason.trim().length < 4) throw const ApiException('请填写至少 4 个字的售后原因');
+    await _requiredShopApi.applyOrderRefund(
+      orderProductId: orderProductId,
+      refundType: refundType,
+      amount: amount,
+      reason: reason,
+    );
+    unawaited(loadOrders(null));
+  });
+
+  Future<void> addToShopCart({
+    required Map<String, Object?> product,
+    required Map<String, Object?> sku,
+    required int quantity,
+  }) async {
+    final skuId = _cartInt(sku['id']);
+    final productId = _cartInt(product['id']);
+    if (skuId == null || productId == null || quantity <= 0) {
+      throw const ApiException('商品规格信息不完整');
+    }
+    final next = shopCart
+        .map((item) => Map<String, Object?>.from(item))
+        .toList();
+    final index = next.indexWhere((item) => _cartInt(item['sku_id']) == skuId);
+    if (index >= 0) {
+      final stock = _cartInt(next[index]['stock']) ?? 999;
+      final current = _cartInt(next[index]['quantity']) ?? 0;
+      next[index]['quantity'] = (current + quantity).clamp(1, stock);
+    } else {
+      next.add({
+        'product_id': productId,
+        'sku_id': skuId,
+        'product_name': '${product['name'] ?? '商品'}',
+        'sku_name': '${sku['name'] ?? '默认规格'}',
+        'picture': '${sku['picture'] ?? product['picture'] ?? ''}',
+        'price': sku['price'] ?? product['price'] ?? 0,
+        'stock': _cartInt(sku['stock']) ?? 0,
+        'quantity': quantity,
+      });
+    }
+    shopCart = next;
+    await _vault.writeShopCart(shopCart);
+    notifyListeners();
+  }
+
+  Future<void> updateShopCartQuantity(int skuId, int quantity) async {
+    final next = shopCart
+        .map((item) => Map<String, Object?>.from(item))
+        .toList();
+    final index = next.indexWhere((item) => _cartInt(item['sku_id']) == skuId);
+    if (index < 0) return;
+    if (quantity <= 0) {
+      next.removeAt(index);
+    } else {
+      final stock = _cartInt(next[index]['stock']) ?? quantity;
+      next[index]['quantity'] = quantity.clamp(1, stock < 1 ? 1 : stock);
+    }
+    shopCart = next;
+    await _vault.writeShopCart(shopCart);
+    notifyListeners();
+  }
+
+  Future<void> clearShopCart() async {
+    shopCart = const [];
+    await _vault.writeShopCart(shopCart);
+    notifyListeners();
   }
 
   Future<Map<String, Object?>> loadShopAddress(int id) =>
@@ -2045,3 +2135,6 @@ class AppController extends ChangeNotifier {
     super.dispose();
   }
 }
+
+int? _cartInt(Object? value) =>
+    value is num ? value.toInt() : int.tryParse('${value ?? ''}');

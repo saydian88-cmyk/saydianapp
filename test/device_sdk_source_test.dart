@@ -39,4 +39,32 @@ void main() {
     expect(yucDevice.identifierLabel, 'MAC · 07:43:00:00:4D:E9');
     expect(compactAddress.macAddress, '5C:8B:BC:6F:26:FC');
   });
+
+  test('manual measurement support is independent from synced metrics', () {
+    final capabilities = DeviceCapabilities.fromMap({
+      'metrics': ['heart_rate', 'hrv'],
+      'manualMetrics': ['heart_rate'],
+    });
+
+    expect(capabilities.supports(HealthMetric.hrv), isTrue);
+    expect(capabilities.supportsManualMeasurement(HealthMetric.hrv), isFalse);
+    expect(
+      capabilities.supportsManualMeasurement(HealthMetric.heartRate),
+      isTrue,
+    );
+  });
+
+  test(
+    'legacy capabilities keep their existing manual measurement behavior',
+    () {
+      final capabilities = DeviceCapabilities.fromMap({
+        'metrics': ['heart_rate'],
+      });
+
+      expect(
+        capabilities.supportsManualMeasurement(HealthMetric.heartRate),
+        isTrue,
+      );
+    },
+  );
 }

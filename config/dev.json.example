@@ -1,4 +1,5 @@
 {
   "SAYDIAN_API_BASE_URL": "https://app.saidian.cc",
+  "SAYDIAN_UPDATE_MANIFEST_URL": "https://api.github.com/repos/saydian88-cmyk/saydianapp/releases/latest",
   "QWEATHER_API_KEY": "replace-with-qweather-key"
 }

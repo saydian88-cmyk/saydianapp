@@ -77,6 +77,7 @@ class AppUpdateService {
       throw const AppUpdateException('版本信息格式不正确');
     }
     final root = decoded.map((key, value) => MapEntry('$key', value));
+    final githubData = _githubReleaseData(root, _targetPlatform);
     final data = root['data'] is Map
         ? (root['data'] as Map).map((key, value) => MapEntry('$key', value))
         : root;
@@ -85,11 +86,13 @@ class AppUpdateService {
       TargetPlatform.android => 'android',
       _ => throw const AppUpdateException('当前平台不支持在线更新'),
     };
-    final platformData = data[platformKey] is Map
-        ? (data[platformKey] as Map).map(
-            (key, value) => MapEntry('$key', value),
-          )
-        : data;
+    final platformData =
+        githubData ??
+        (data[platformKey] is Map
+            ? (data[platformKey] as Map).map(
+                (key, value) => MapEntry('$key', value),
+              )
+            : data);
     final latestVersion =
         '${platformData['version'] ?? platformData['latest_version'] ?? ''}'
             .trim();
@@ -136,9 +139,59 @@ class AppUpdateService {
 
   static Uri? _configuredManifestUri() {
     const value = String.fromEnvironment('SAYDIAN_UPDATE_MANIFEST_URL');
-    if (value.trim().isEmpty) return null;
-    return Uri.tryParse(value.trim());
+    final configured = value.trim();
+    return Uri.tryParse(
+      configured.isEmpty
+          ? 'https://api.github.com/repos/saydian88-cmyk/saydianapp/releases/latest'
+          : configured,
+    );
   }
+}
+
+Map<String, Object?>? _githubReleaseData(
+  Map<String, Object?> root,
+  TargetPlatform platform,
+) {
+  final tag = '${root['tag_name'] ?? ''}'.trim();
+  final assets = root['assets'];
+  if (tag.isEmpty || assets is! List) return null;
+  final extension = platform == TargetPlatform.android
+      ? '.apk'
+      : platform == TargetPlatform.iOS
+      ? '.ipa'
+      : '';
+  if (extension.isEmpty) return null;
+  Map<String, Object?>? asset;
+  for (final raw in assets.whereType<Map>()) {
+    final candidate = raw.map((key, value) => MapEntry('$key', value));
+    if ('${candidate['name'] ?? ''}'.toLowerCase().endsWith(extension)) {
+      asset = candidate;
+      break;
+    }
+  }
+  if (asset == null) {
+    throw AppUpdateException('最新版本没有可安装的 $extension 文件');
+  }
+  final versionMatch = RegExp(
+    r'(\d+\.\d+\.\d+)(?:\+(\d+)|[-_]build[-_]?(\d+))?',
+  ).firstMatch(tag);
+  final assetMatch = RegExp(
+    r'(\d+\.\d+\.\d+)\+(\d+)',
+  ).firstMatch('${asset['name'] ?? ''}');
+  final version = versionMatch?.group(1) ?? assetMatch?.group(1) ?? '';
+  final build = int.tryParse(
+    versionMatch?.group(2) ??
+        versionMatch?.group(3) ??
+        assetMatch?.group(2) ??
+        '',
+  );
+  return {
+    'version': version,
+    'build': build ?? 0,
+    'download_url': asset['browser_download_url'],
+    'release_notes': root['body'],
+    'force_update': false,
+  };
 }
 
 int _asInt(Object? value) =>

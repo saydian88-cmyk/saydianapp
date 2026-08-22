@@ -107,15 +107,20 @@ abstract interface class SaydianShopApi {
   Future<Map<String, Object?>> getShopHome();
   Future<Map<String, Object?>> getShopProduct(int id);
   Future<Map<String, Object?>> previewShopOrder({
-    required int skuId,
-    required int quantity,
+    required List<Map<String, int>> items,
   });
   Future<Map<String, Object?>> createShopOrder({
-    required int skuId,
-    required int quantity,
+    required List<Map<String, int>> items,
     required int addressId,
     String buyerMessage = '',
     num point = 0,
+  });
+  Future<void> confirmOrderReceipt(int orderId);
+  Future<void> applyOrderRefund({
+    required int orderProductId,
+    required int refundType,
+    required num amount,
+    required String reason,
   });
   Future<Map<String, Object?>> getAddress(int id);
   Future<Map<String, Object?>> saveAddress({
@@ -301,8 +306,41 @@ class SaydianApiClient
         : const [];
     return rawList
         .whereType<Map>()
-        .map((value) => value.map((key, value) => MapEntry('$key', value)))
-        .toList();
+        .map((value) {
+          final relation = value.map((key, value) => MapEntry('$key', value));
+          final rawMember = relation['member'];
+          final member = rawMember is Map
+              ? rawMember.map((key, value) => MapEntry('$key', value))
+              : const <String, Object?>{};
+          // The care endpoint currently returns the complete member row.  Keep
+          // only fields that are needed by the family-care UI so credentials and
+          // other account internals never enter application state.
+          final safeMember = <String, Object?>{
+            for (final key in const [
+              'id',
+              'nickname',
+              'mobile',
+              'head_portrait',
+              'gender',
+            ])
+              if (member.containsKey(key)) key: member[key],
+          };
+          return <String, Object?>{
+            for (final key in const [
+              'id',
+              'member_id',
+              'to_member_id',
+              'status',
+              'created_at',
+            ])
+              if (relation.containsKey(key)) key: relation[key],
+            'member': safeMember,
+            'nickname': safeMember['nickname'],
+            'mobile': safeMember['mobile'],
+            'head_portrait': safeMember['head_portrait'],
+          };
+        })
+        .toList(growable: false);
   }
 
   @override
@@ -505,10 +543,13 @@ class SaydianApiClient
 
   @override
   Future<Map<String, Object?>> previewShopOrder({
-    required int skuId,
-    required int quantity,
+    required List<Map<String, int>> items,
   }) async {
-    final data = jsonEncode({'sku_id': skuId, 'num': quantity});
+    if (items.isEmpty) throw const ApiException('请选择要结算的商品');
+    if (items.length != 1) {
+      throw const ApiException('当前商城暂不支持多件商品合并结算，请分别结算');
+    }
+    final data = jsonEncode(items.single);
     final response = await _authorizedGet(
       '/api/inv-shop/v1/order/order/preview',
       {'type': 'buy_now', 'data': data, 'is_channel': '0'},
@@ -518,26 +559,55 @@ class SaydianApiClient
 
   @override
   Future<Map<String, Object?>> createShopOrder({
-    required int skuId,
-    required int quantity,
+    required List<Map<String, int>> items,
     required int addressId,
     String buyerMessage = '',
     num point = 0,
   }) async {
-    final response = await _authorizedPostJson(
-      '/api/inv-shop/v1/order/order/create',
+    if (items.isEmpty) throw const ApiException('请选择要结算的商品');
+    if (items.length != 1) {
+      throw const ApiException('当前商城暂不支持多件商品合并结算，请分别结算');
+    }
+    final response =
+        await _authorizedPostJson('/api/inv-shop/v1/order/order/create', {
+          'merchant_id': 0,
+          'is_channel': 0,
+          'address_id': addressId,
+          'buyer_message': buyerMessage.trim(),
+          'data': jsonEncode(items.single),
+          'shipping_type': 1,
+          'type': 'buy_now',
+          'point': point,
+        });
+    return _data(_decode(response));
+  }
+
+  @override
+  Future<void> confirmOrderReceipt(int orderId) async {
+    final response = await _authorizedPostFields(
+      '/api/inv-shop/v1/member/order/take-delivery',
+      {'id': '$orderId'},
+    );
+    _decode(response);
+  }
+
+  @override
+  Future<void> applyOrderRefund({
+    required int orderProductId,
+    required int refundType,
+    required num amount,
+    required String reason,
+  }) async {
+    final response = await _authorizedPostFields(
+      '/api/inv-shop/v1/member/order-product/refund-apply',
       {
-        'merchant_id': 0,
-        'is_channel': 0,
-        'address_id': addressId,
-        'buyer_message': buyerMessage.trim(),
-        'data': jsonEncode({'sku_id': skuId, 'num': quantity}),
-        'shipping_type': 1,
-        'type': 'buy_now',
-        'point': point,
+        'id': '$orderProductId',
+        'refund_type': '$refundType',
+        'refund_require_money': '$amount',
+        'refund_reason': reason.trim(),
       },
     );
-    return _data(_decode(response));
+    _decode(response);
   }
 
   @override
@@ -674,23 +744,21 @@ class SaydianApiClient
   Future<http.Response> _authorizedGet(
     String path, [
     Map<String, String>? query,
-  ]) async {
-    final session = await _requiredSession();
-    return _performRequest(
+  ]) => _withAuthorizationRetry(
+    (session) => _performRequest(
       () => _client.get(
         _uri(path, query),
         headers: {'Authorization': 'Bearer ${session.accessToken}'},
       ),
-    );
-  }
+    ),
+  );
 
   Future<http.Response> _authorizedPostJson(
     String path,
     Map<String, Object?> body, {
     Map<String, String> headers = const {},
-  }) async {
-    final session = await _requiredSession();
-    return _performRequest(
+  }) => _withAuthorizationRetry(
+    (session) => _performRequest(
       () => _client.post(
         _uri(path),
         headers: {
@@ -700,26 +768,24 @@ class SaydianApiClient
         },
         body: jsonEncode(body),
       ),
-    );
-  }
+    ),
+  );
 
   Future<http.Response> _authorizedPostFields(
     String path,
     Map<String, String> fields,
-  ) async {
-    final session = await _requiredSession();
+  ) => _withAuthorizationRetry((session) {
     final request = http.MultipartRequest('POST', _uri(path))
       ..headers['Authorization'] = 'Bearer ${session.accessToken}'
       ..fields.addAll(fields);
     return _sendMultipart(request);
-  }
+  });
 
   Future<http.Response> _authorizedPutJson(
     String path,
     Map<String, Object?> body,
-  ) async {
-    final session = await _requiredSession();
-    return _performRequest(
+  ) => _withAuthorizationRetry(
+    (session) => _performRequest(
       () => _client.put(
         _uri(path),
         headers: {
@@ -728,7 +794,37 @@ class SaydianApiClient
         },
         body: jsonEncode(body),
       ),
-    );
+    ),
+  );
+
+  Future<http.Response> _withAuthorizationRetry(
+    Future<http.Response> Function(Session session) request,
+  ) async {
+    final session = await _requiredSession();
+    final response = await request(session);
+    if (!_isUnauthorizedResponse(response) ||
+        session.refreshToken.trim().isEmpty) {
+      return response;
+    }
+    try {
+      final refreshed = await refreshSession(session);
+      return request(refreshed);
+    } on ApiException {
+      // Preserve the original protected-resource response so the caller shows
+      // the backend's useful authentication message. A failed refresh is not
+      // retried again and never clears the long-lived local session silently.
+      return response;
+    }
+  }
+
+  bool _isUnauthorizedResponse(http.Response response) {
+    if (response.statusCode == 401) return true;
+    try {
+      final payload = jsonDecode(response.body);
+      return payload is Map && payload['code'] is num && payload['code'] == 401;
+    } on FormatException {
+      return false;
+    }
   }
 
   Future<http.Response> _sendMultipart(http.MultipartRequest request) async {

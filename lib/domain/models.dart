@@ -294,6 +294,7 @@ class WearableUserProfile {
 class DeviceCapabilities {
   const DeviceCapabilities({
     required this.metrics,
+    this.manualMetrics,
     this.features = const <DeviceFeature>{},
     this.integratedFeatures = const <DeviceFeature>{},
     this.supportsBackgroundSync = false,
@@ -302,6 +303,7 @@ class DeviceCapabilities {
   });
 
   final Set<HealthMetric> metrics;
+  final Set<HealthMetric>? manualMetrics;
   final Set<DeviceFeature> features;
   final Set<DeviceFeature> integratedFeatures;
   final bool supportsBackgroundSync;
@@ -314,6 +316,12 @@ class DeviceCapabilities {
         ? raw.map((value) => HealthMetric.fromWire('$value')).toSet()
         : <HealthMetric>{};
     final rawFeatures = map['features'];
+    final rawManualMetrics = map['manualMetrics'];
+    final manualMetrics = rawManualMetrics is List
+        ? rawManualMetrics
+              .map((value) => HealthMetric.fromWire('$value'))
+              .toSet()
+        : null;
     final features = rawFeatures is List
         ? rawFeatures
               .map((value) => DeviceFeature.tryFromWire('$value'))
@@ -332,6 +340,7 @@ class DeviceCapabilities {
         : <DeviceFeature>{DeviceFeature.healthMonitoring};
     return DeviceCapabilities(
       metrics: metrics,
+      manualMetrics: manualMetrics,
       features: features,
       integratedFeatures: integratedFeatures,
       supportsBackgroundSync: map['supportsBackgroundSync'] == true,
@@ -341,6 +350,9 @@ class DeviceCapabilities {
   }
 
   bool supports(HealthMetric metric) => metrics.contains(metric);
+
+  bool supportsManualMeasurement(HealthMetric metric) =>
+      manualMetrics?.contains(metric) ?? supports(metric);
 
   bool supportsFeature(DeviceFeature feature) => features.contains(feature);
 

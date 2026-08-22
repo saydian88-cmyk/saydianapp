@@ -111,7 +111,7 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, '立即购买'));
     await tester.pumpAndSettle();
     expect(find.text('请选择规格'), findsOneWidget);
-    await tester.tap(find.widgetWithText(FilledButton, '确定'));
+    await tester.tap(find.widgetWithText(FilledButton, '立即购买').last);
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('shop-checkout')), findsOneWidget);
@@ -124,6 +124,32 @@ void main() {
     expect(find.text('订单提交成功，等待支付'), findsOneWidget);
     expect(find.textContaining('当前请在微信小程序完成支付'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('shopping cart persists items and supports quantity changes', (
+    tester,
+  ) async {
+    final controller = _authenticatedController();
+    addTearDown(controller.dispose);
+    await controller.addToShopCart(
+      product: const {'id': 1, 'name': 'QA 智能手表', 'picture': '', 'price': 199},
+      sku: const {'id': 11, 'name': '黑色', 'price': 199, 'stock': 5},
+      quantity: 1,
+    );
+    await _pumpPhone(tester, controller);
+
+    await tester.tap(find.text('赛电商城'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('购物车'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('shopping-cart-page')), findsOneWidget);
+    expect(find.text('QA 智能手表'), findsOneWidget);
+    expect(find.text('¥199.00'), findsWidgets);
+    await tester.tap(find.byIcon(Icons.add));
+    await tester.pump();
+    expect(controller.shopCart.single['quantity'], 2);
+    expect(find.byKey(const Key('cart-checkout')), findsOneWidget);
   });
 
   testWidgets('device scan and connection uses the wearable flow', (
@@ -672,6 +698,25 @@ void main() {
 
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('care dialog rejects the signed-in account mobile', (
+    tester,
+  ) async {
+    final controller = _authenticatedController();
+    addTearDown(controller.dispose);
+    await _pumpPhone(tester, controller);
+
+    await tester.tap(find.text('远程关爱'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('添加关爱'));
+    await tester.tap(find.text('添加关爱'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField), '13600136000');
+    await tester.tap(find.widgetWithText(FilledButton, '发送'));
+    await tester.pump();
+
+    expect(find.text('不能添加当前登录账号'), findsOneWidget);
+  });
 }
 
 AppController _controller({
@@ -691,6 +736,7 @@ AppController _authenticatedController({_QaApi? api, _QaWearable? wearable}) {
     ..session = _session
     ..memberProfile = const {
       'nickname': 'QA 用户',
+      'mobile': '13600136000',
       'birthday': '1990-01-01',
       'height': 170,
       'weight': 60,
@@ -888,8 +934,7 @@ class _QaApi extends Fake
 
   @override
   Future<Map<String, Object?>> previewShopOrder({
-    required int skuId,
-    required int quantity,
+    required List<Map<String, int>> items,
   }) async => {
     'address': const {
       'id': 5,
@@ -905,15 +950,14 @@ class _QaApi extends Fake
         'product_name': 'QA 智能手表',
         'sku_name': '黑色',
         'product_money': 199,
-        'num': quantity,
+        'num': items.first['num'] ?? 1,
       },
     ],
   };
 
   @override
   Future<Map<String, Object?>> createShopOrder({
-    required int skuId,
-    required int quantity,
+    required List<Map<String, int>> items,
     required int addressId,
     String buyerMessage = '',
     num point = 0,
@@ -921,6 +965,17 @@ class _QaApi extends Fake
     createdOrder = true;
     return const {'id': 100};
   }
+
+  @override
+  Future<void> confirmOrderReceipt(int orderId) async {}
+
+  @override
+  Future<void> applyOrderRefund({
+    required int orderProductId,
+    required int refundType,
+    required num amount,
+    required String reason,
+  }) async {}
 
   @override
   Future<void> saveMemberProfile({

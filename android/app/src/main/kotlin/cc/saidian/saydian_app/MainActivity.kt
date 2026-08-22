@@ -530,6 +530,10 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     private var latestEcgHeartRate = 0
     private var latestEcgHrv = 0
     private var activeHrvUsesEcg = false
+    private var activeHrvUsesMiniCheckup = false
+    private var directHrvMeasurementSupported = false
+    private var hrvMiniCheckupSupported = false
+    private var bloodGlucoseMeasurementSupported = false
     private var temperatureRetryUsed = false
     private var bloodPressureStartGeneration = 0
     private var pendingBloodPressureStart: ResultCallback<Unit>? = null
@@ -755,6 +759,9 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         watchFaceScreenHeight = 0
         watchDataDays = 3
         capabilities = defaultCapabilities()
+        directHrvMeasurementSupported = false
+        hrvMiniCheckupSupported = false
+        bloodGlucoseMeasurementSupported = false
         val generation =
             synchronized(this) {
                 connectionGeneration += 1
@@ -4843,8 +4850,38 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 }
                 "hrv" -> {
                     val preferences = VpSpGetUtil.getVpSpVariInstance(appContext)
-                    if (!manager.isJLCPUPlatform && preferences.isSupportHrvAppDetect) {
+                    // W9S firmware does not expose the standalone HRV command,
+                    // but its supported mini-checkup protocol returns HRV as a
+                    // first-class result. Use that official route so the watch
+                    // opens its health check page and returns progress/errors.
+                    if (hrvMiniCheckupSupported) {
                         activeHrvUsesEcg = false
+                        activeHrvUsesMiniCheckup = true
+                        manager.startMiniCheckup(
+                            BleWriteResponse { code ->
+                                connectionHandler.post {
+                                    if (code == Code.REQUEST_SUCCESS) {
+                                        Log.i(LOG_TAG, "HRV mini-checkup command accepted")
+                                        callback.success(Unit)
+                                    } else {
+                                        activeHrvUsesMiniCheckup = false
+                                        measurementResultTimeoutTask?.let(connectionHandler::removeCallbacks)
+                                        measurementResultTimeoutTask = null
+                                        synchronized(this) {
+                                            if (activeMetric == "hrv") activeMetric = null
+                                        }
+                                        callback.error(
+                                            "HRV_MEASUREMENT_FAILED",
+                                            "手表未能开始 HRV 健康检测，请稍后重试",
+                                        )
+                                    }
+                                }
+                            },
+                            miniCheckupHrvListener,
+                        )
+                    } else if (directHrvMeasurementSupported || preferences.isSupportHrvAppDetect) {
+                        activeHrvUsesEcg = false
+                        activeHrvUsesMiniCheckup = false
                         manager.startDetectHrv(measurementWrite(callback), hrvListener)
                     } else if (preferences.isSupportECG) {
                         // Some W9S firmware exposes HRV only as part of the ECG
@@ -4855,6 +4892,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                         latestEcgHeartRate = 0
                         latestEcgHrv = 0
                         activeHrvUsesEcg = true
+                        activeHrvUsesMiniCheckup = false
                         manager.startDetectECG(measurementWrite(callback), true, ecgListener)
                     } else {
                         throw IllegalStateException("HRV app measurement is not supported")
@@ -4910,9 +4948,25 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             "blood_composition" -> manager.stopDetectBloodComponent(response)
             "ecg" -> manager.stopDetectECG(response, true, ecgListener)
             "hrv" -> {
-                if (activeHrvUsesEcg) manager.stopDetectECG(response, true, ecgListener)
-                else manager.stopDetectHrv(response, hrvListener)
+                if (activeHrvUsesMiniCheckup) {
+                    manager.stopMiniCheckup(
+                        BleWriteResponse { code ->
+                            activeHrvUsesMiniCheckup = false
+                            if (code == Code.REQUEST_SUCCESS) {
+                                callback.success(Unit)
+                            } else {
+                                callback.error("MEASUREMENT_STOP_FAILED", "暂时无法停止 HRV 测量")
+                            }
+                        },
+                        miniCheckupHrvListener,
+                    )
+                } else if (activeHrvUsesEcg) {
+                    manager.stopDetectECG(response, true, ecgListener)
+                } else {
+                    manager.stopDetectHrv(response, hrvListener)
+                }
                 activeHrvUsesEcg = false
+                activeHrvUsesMiniCheckup = false
             }
             else -> callback.error("MEASUREMENT_NOT_AVAILABLE", "该指标没有可停止的实时测量")
         }
@@ -4970,7 +5024,8 @@ private class VeepooWearableAdapter(context: android.content.Context) {
 
     private fun measurementResultTimeoutFor(metric: String): Long =
         when (metric) {
-            "ecg", "hrv", "body_composition", "blood_composition" -> 120_000L
+            "hrv" -> 180_000L
+            "ecg", "body_composition", "blood_composition" -> 120_000L
             "blood_pressure" -> 140_000L
             else -> 75_000L
         }
@@ -5217,6 +5272,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
         cancelPendingBloodPressureStart()
         activeMetric = null
         activeHrvUsesEcg = false
+        activeHrvUsesMiniCheckup = false
     }
 
     private fun failPendingBloodPressureStart(
@@ -5297,6 +5353,70 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 acceptMiniCheckupBloodPressure(high, low)
             }
         }
+
+    private val miniCheckupHrvListener =
+        object : IMiniCheckupOptListener {
+            override fun onMiniCheckupTestProgress(progress: Int) {
+                val normalized = progress.coerceIn(0, 100)
+                Log.d(LOG_TAG, "HRV mini-checkup progress=$normalized")
+                emit(
+                    "measurementProgress",
+                    mapOf(
+                        "metric" to "hrv",
+                        "progress" to normalized,
+                        "deviceState" to "FREE",
+                    ),
+                )
+            }
+
+            override fun onMiniCheckupStopSuccess() {
+                activeHrvUsesMiniCheckup = false
+            }
+
+            override fun onMiniCheckupTestFailed(errorCode: EMiniCheckupTestErrorCode) {
+                activeHrvUsesMiniCheckup = false
+                val (code, message) =
+                    when (errorCode) {
+                        EMiniCheckupTestErrorCode.WEARING_ABNORMALITY ->
+                            "HRV_NOT_WORN" to "请将手表贴合手腕并保持静止后重新测量 HRV"
+                        EMiniCheckupTestErrorCode.LOW_POWER ->
+                            "HRV_LOW_BATTERY" to "手表电量过低，充电后再测量 HRV"
+                        EMiniCheckupTestErrorCode.DEVICE_BUSY ->
+                            "HRV_DEVICE_BUSY" to "手表正在处理其他任务，请稍后重试"
+                        EMiniCheckupTestErrorCode.FUNCTION_NOT_SUPPORT ->
+                            "HRV_MEASUREMENT_FAILED" to "当前手表暂不支持 HRV 健康检测"
+                        else ->
+                            "HRV_MEASUREMENT_FAILED" to "HRV 测量未完成，请正确佩戴并保持静止后重试"
+                    }
+                failMeasurement("hrv", code, message)
+            }
+
+            override fun onMiniCheckupSuccess(data: MiniCheckupResultData) {
+                acceptMiniCheckupHrv(data.hrv)
+            }
+
+            override fun onMiniCheckupDetailTestSuccess(data: MiniCheckupDetailData) {
+                acceptMiniCheckupHrv(data.hrv)
+            }
+        }
+
+    private fun acceptMiniCheckupHrv(value: Int) {
+        Log.i(
+            LOG_TAG,
+            "measurement callback metric=hrv protocol=mini_checkup value=$value active=$activeMetric",
+        )
+        if (value in 1..250) {
+            if (claimMeasurementResult("hrv")) {
+                emitRecord(record("hrv", mapOf("value" to value), "ms", Date()))
+            }
+        } else if (activeMetric == "hrv") {
+            failMeasurement(
+                "hrv",
+                "HRV_RESULT_EMPTY",
+                "本次健康检测未返回有效 HRV 数据，请保持静止后重试",
+            )
+        }
+    }
 
     private fun acceptMiniCheckupBloodPressure(high: Int, low: Int) {
         Log.i(
@@ -5530,12 +5650,40 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     private val bloodGlucoseListener =
         object : IBloodGlucoseChangeListener {
             override fun onDetectError(progress: Int, status: EBloodGlucoseStatus) {
-                failMeasurement("blood_glucose", "GLUCOSE_MEASUREMENT_FAILED", "血糖测量未完成")
+                val (code, message) =
+                    when (status) {
+                        EBloodGlucoseStatus.WEARING_ERROR ->
+                            "GLUCOSE_NOT_WORN" to "未检测到正确佩戴，请将手表贴合手腕后重新测量血糖"
+                        EBloodGlucoseStatus.LOW_POWER ->
+                            "GLUCOSE_LOW_BATTERY" to "手表电量过低，充电后再测量血糖"
+                        EBloodGlucoseStatus.BUSY ->
+                            "GLUCOSE_DEVICE_BUSY" to "手表正在处理其他任务，请稍后再测量血糖"
+                        EBloodGlucoseStatus.NONSUPPORT ->
+                            "UNSUPPORTED_METRIC" to "当前手表不支持手动测量血糖"
+                        else ->
+                            "GLUCOSE_MEASUREMENT_FAILED" to "血糖测量未完成，请保持正确佩戴后重试"
+                    }
+                failMeasurement("blood_glucose", code, message)
             }
 
             override fun onBloodGlucoseDetect(progress: Int, value: Float, risk: EBloodGlucoseRiskLevel) {
+                emit(
+                    "measurementProgress",
+                    mapOf(
+                        "metric" to "blood_glucose",
+                        "progress" to progress.coerceIn(0, 100),
+                        "deviceState" to "FREE",
+                    ),
+                )
                 if (progress >= 100 && value > 0 && claimMeasurementResult("blood_glucose")) {
-                    emitRecord(record("blood_glucose", mapOf("value" to value), "mmol/L", Date()))
+                    emitRecord(
+                        record(
+                            "blood_glucose",
+                            mapOf("value" to value, "risk" to risk.value),
+                            "mmol/L",
+                            Date(),
+                        ),
+                    )
                 }
             }
 
@@ -5961,9 +6109,15 @@ private class VeepooWearableAdapter(context: android.content.Context) {
                 "blood_composition" -> manager.stopDetectBloodComponent(ignored)
                 "ecg" -> manager.stopDetectECG(ignored, true, ecgListener)
                 "hrv" -> {
-                    if (activeHrvUsesEcg) manager.stopDetectECG(ignored, true, ecgListener)
-                    else manager.stopDetectHrv(ignored, hrvListener)
+                    if (activeHrvUsesMiniCheckup) {
+                        manager.stopMiniCheckup(BleWriteResponse { }, miniCheckupHrvListener)
+                    } else if (activeHrvUsesEcg) {
+                        manager.stopDetectECG(ignored, true, ecgListener)
+                    } else {
+                        manager.stopDetectHrv(ignored, hrvListener)
+                    }
                     activeHrvUsesEcg = false
+                    activeHrvUsesMiniCheckup = false
                 }
             }
         }.onFailure { error ->
@@ -6238,17 +6392,57 @@ private class VeepooWearableAdapter(context: android.content.Context) {
     }
 
     private fun capabilitiesFrom(data: FunctionDeviceSupportData): Map<String, Any?> {
+        val preferences = VpSpGetUtil.getVpSpVariInstance(appContext)
+        val pendingDeviceName =
+            connectedDeviceName.ifBlank {
+                synchronized(devices) { devices[connectingDeviceId]?.name.orEmpty() }
+            }
+        val isKnownW9s =
+            manager.isJLCPUPlatform && pendingDeviceName.contains("W9S", ignoreCase = true)
+        // Some W9S firmware revisions omit older capability bits. HRV uses
+        // the advertised mini-checkup protocol; glucose remains model-scoped
+        // because its command and terminal result were verified on W9S.
+        hrvMiniCheckupSupported = isKnownW9s && preferences.isSupportMiniCheckup
+        directHrvMeasurementSupported =
+            data.hrvAppDetectFunction.haveFunction() ||
+                preferences.isSupportHrvAppDetect
+        bloodGlucoseMeasurementSupported =
+            data.bloodGlucose.haveFunction() ||
+                preferences.isSupportBloodGlucoseDetect ||
+                preferences.isSupportBloodGlucose ||
+                isKnownW9s
+        Log.i(
+            LOG_TAG,
+            "measurement capabilities device=$pendingDeviceName directHrv=$directHrvMeasurementSupported " +
+                "miniCheckupHrv=$hrvMiniCheckupSupported " +
+                "bloodGlucose=$bloodGlucoseMeasurementSupported w9sCompat=$isKnownW9s",
+        )
         val metrics = mutableListOf("steps", "distance", "calories", "sleep")
         if (data.heartDetect.haveFunction()) metrics += "heart_rate"
         if (data.bp.haveFunction()) metrics += "blood_pressure"
         if (data.spo2H.haveFunction()) metrics += "blood_oxygen"
-        if (data.bloodGlucose.haveFunction()) metrics += "blood_glucose"
+        if (bloodGlucoseMeasurementSupported) {
+            metrics += "blood_glucose"
+        }
         if (data.temperatureFunction.haveFunction() || data.temptureType > 0) metrics += "body_temperature"
         if (data.ecg.haveFunction()) metrics += "ecg"
-        if (data.hrvFunction.haveFunction()) metrics += "hrv"
+        if (data.hrvFunction.haveFunction() || directHrvMeasurementSupported || hrvMiniCheckupSupported) {
+            metrics += "hrv"
+        }
         if (data.bodyComponent.haveFunction()) metrics += "body_composition"
         if (data.bloodComponent.haveFunction()) metrics += "blood_composition"
-        val preferences = VpSpGetUtil.getVpSpVariInstance(appContext)
+        val manualMetrics = mutableListOf<String>()
+        if (data.heartDetect.haveFunction()) manualMetrics += "heart_rate"
+        if (data.bp.haveFunction()) manualMetrics += "blood_pressure"
+        if (data.spo2H.haveFunction()) manualMetrics += "blood_oxygen"
+        if (bloodGlucoseMeasurementSupported) manualMetrics += "blood_glucose"
+        if (data.temperatureFunction.haveFunction() || data.temptureType > 0) {
+            manualMetrics += "body_temperature"
+        }
+        if (data.ecg.haveFunction()) manualMetrics += "ecg"
+        if (directHrvMeasurementSupported || hrvMiniCheckupSupported) manualMetrics += "hrv"
+        if (data.bodyComponent.haveFunction()) manualMetrics += "body_composition"
+        if (data.bloodComponent.haveFunction()) manualMetrics += "blood_composition"
         val features = mutableListOf("health_monitoring")
         if (data.watchUiServerCount > 0 || data.watchUiCoustomCount > 0 || manager.isJLCPUPlatform) {
             features += "watch_faces"
@@ -6294,6 +6488,7 @@ private class VeepooWearableAdapter(context: android.content.Context) {
             }
         return mapOf(
             "metrics" to metrics,
+            "manualMetrics" to manualMetrics,
             "features" to features.distinct(),
             "integratedFeatures" to integratedFeatures,
             "supportsBackgroundSync" to true,

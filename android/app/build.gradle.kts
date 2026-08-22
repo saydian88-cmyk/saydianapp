@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -13,6 +15,12 @@ val veepooSdkArtifacts =
 val veepooSdkFiles = veepooSdkArtifacts.map { file("libs/$it") }
 val hasAnyVeepooArtifact = veepooSdkFiles.any { it.isFile }
 val hasCompleteVeepooSdk = veepooSdkFiles.all { it.isFile }
+val signingPropertiesFile = rootProject.file("key.properties")
+val signingProperties = Properties().apply {
+    if (signingPropertiesFile.isFile) {
+        signingPropertiesFile.inputStream().use(::load)
+    }
+}
 
 if (hasAnyVeepooArtifact && !hasCompleteVeepooSdk) {
     val missing = veepooSdkFiles.filterNot { it.isFile }.joinToString { it.name }
@@ -42,11 +50,25 @@ android {
         buildConfig = true
     }
 
+    signingConfigs {
+        if (signingPropertiesFile.isFile) {
+            create("productionRelease") {
+                keyAlias = signingProperties.getProperty("keyAlias")
+                keyPassword = signingProperties.getProperty("keyPassword")
+                storeFile = file(signingProperties.getProperty("storeFile"))
+                storePassword = signingProperties.getProperty("storePassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // Internal builds intentionally use the debug key until the Android
-            // store signing material is configured outside the repository.
-            signingConfig = signingConfigs.getByName("debug")
+            // Local QA keeps the existing debug-signing fallback.  Tagged
+            // online releases provide key.properties from GitHub Secrets and
+            // therefore use the stable production key.
+            signingConfig = signingConfigs.getByName(
+                if (signingPropertiesFile.isFile) "productionRelease" else "debug",
+            )
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

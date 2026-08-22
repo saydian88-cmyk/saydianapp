@@ -53,6 +53,21 @@ cd ios && pod install && cd ..
 flutter build ios --release --no-codesign
 ```
 
+### Android 在线更新
+
+App 默认从 GitHub Releases 的最新版本检查 Android APK。发布新版本时先更新
+`pubspec.yaml` 中的版本号，再创建形如 `android-v0.1.18+22` 的 Git 标签。
+`.github/workflows/android-release.yml` 会运行分析和测试、使用正式签名构建 APK，
+并发布到 GitHub Release。仓库需要配置以下 Actions Secrets：
+
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+- `ANDROID_STORE_PASSWORD`
+
+可用仓库变量 `SAYDIAN_API_BASE_URL` 覆盖生产 API 地址。正式签名必须长期保持一致，
+否则手机无法在已安装版本上直接升级。
+
 Windows 开发机可通过 GitHub Actions 生成已签名的 Ad Hoc IPA，证书、描述文件、
 触发方式及安装步骤见 [Windows 与 GitHub Actions iOS 打包说明](docs/github-actions-ios.md)。
 

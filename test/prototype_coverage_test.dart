@@ -74,7 +74,7 @@ void main() {
       await tester.ensureVisible(find.text('屏幕显示'));
       await tester.pumpAndSettle();
       expect(find.text('查找手表'), findsOneWidget);
-      expect(find.text('常用联系人'), findsOneWidget);
+      expect(find.text('联系人'), findsOneWidget);
       expect(find.text('健康提醒'), findsOneWidget);
       expect(find.text('屏幕显示'), findsOneWidget);
 
@@ -209,7 +209,7 @@ void main() {
     expect(find.text('隐私政策'), findsOneWidget);
     expect(find.text('用户协议'), findsOneWidget);
     expect(find.text('检查更新'), findsOneWidget);
-    expect(find.text('在线更新服务暂未配置'), findsOneWidget);
+    expect(find.text('通过安全版本服务检查更新'), findsOneWidget);
 
     await tester.pumpWidget(const MaterialApp(home: CustomerServicePage()));
     await tester.pumpAndSettle();

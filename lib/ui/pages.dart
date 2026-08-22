@@ -3695,7 +3695,7 @@ class DevicePage extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      feature.label,
+                      feature == DeviceFeature.contacts ? '联系人' : feature.label,
                       style: const TextStyle(fontWeight: FontWeight.w800),
                     ),
                     const SizedBox(height: 3),
@@ -4887,7 +4887,9 @@ class CarePage extends StatelessWidget {
                       '${member['nickname'] ?? member['mobile'] ?? '关爱成员'}',
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
-                    subtitle: const Text('查看已授权健康数据'),
+                    subtitle: Text(
+                      '${member['mobile'] ?? '手机号未提供'}\n点击查看实时健康数据',
+                    ),
                     trailing: const Icon(Icons.chevron_right_rounded),
                   ),
                 ),
@@ -4924,14 +4926,28 @@ class _CareMemberPageState extends State<CareMemberPage> {
   Map<String, Object?> _data = const {};
   bool _loading = true;
   DateTime _day = DateTime.now();
+  Timer? _refreshTimer;
+  DateTime? _updatedAt;
 
   @override
   void initState() {
     super.initState();
     unawaited(_load());
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (_isToday(_day) && mounted && !_loading) {
+        unawaited(_load(silent: true));
+      }
+    });
   }
 
-  Future<void> _load() async {
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (!silent && mounted) setState(() => _loading = true);
     final value = await widget.controller.loadCareMemberPreview(
       widget.careId,
       day: _day,
@@ -4940,6 +4956,7 @@ class _CareMemberPageState extends State<CareMemberPage> {
       setState(() {
         _data = value;
         _loading = false;
+        _updatedAt = DateTime.now();
       });
     }
   }
@@ -4991,6 +5008,28 @@ class _CareMemberPageState extends State<CareMemberPage> {
                     ),
                   ),
                   const SizedBox(height: 14),
+                  if (_updatedAt != null && _isToday(_day))
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          const Icon(
+                            Icons.sync_rounded,
+                            size: 16,
+                            color: SaydianColors.muted,
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            '实时更新 · ${DateFormat('HH:mm:ss').format(_updatedAt!)}',
+                            style: const TextStyle(
+                              color: SaydianColors.muted,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   if (_data.isEmpty)
                     const _InlineNotice(
                       message: '对方尚未授权健康数据，或当前日期没有数据。',
@@ -5298,7 +5337,9 @@ Map<String, String> _careSummary(Map<String, Object?> item) {
 }
 
 class _AddCareDialog extends StatefulWidget {
-  const _AddCareDialog();
+  const _AddCareDialog({required this.ownMobile});
+
+  final String ownMobile;
 
   @override
   State<_AddCareDialog> createState() => _AddCareDialogState();
@@ -5334,10 +5375,16 @@ class _AddCareDialogState extends State<_AddCareDialog> {
           labelText: '对方手机号',
           hintText: '请输入手机号',
         ),
-        validator: (value) =>
-            RegExp(r'^\d{6,20}$').hasMatch(value?.trim() ?? '')
-            ? null
-            : '请输入正确的手机号',
+        validator: (value) {
+          final mobile = value?.trim() ?? '';
+          if (!RegExp(r'^\d{6,20}$').hasMatch(mobile)) {
+            return '请输入正确的手机号';
+          }
+          if (widget.ownMobile.isNotEmpty && mobile == widget.ownMobile) {
+            return '不能添加当前登录账号';
+          }
+          return null;
+        },
         onFieldSubmitted: (_) => _submit(),
       ),
     ),
@@ -5357,7 +5404,9 @@ Future<void> _showAddCareDialog(
 ) async {
   final mobile = await showDialog<String>(
     context: context,
-    builder: (_) => const _AddCareDialog(),
+    builder: (_) => _AddCareDialog(
+      ownMobile: '${controller.memberProfile['mobile'] ?? ''}'.trim(),
+    ),
   );
   if (mobile == null || !context.mounted) return;
 
@@ -5392,14 +5441,18 @@ class SettingsPage extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: const Color(0xFF141A25),
-              border: Border.all(color: const Color(0xFF30394A)),
-              borderRadius: BorderRadius.circular(20),
+              gradient: const LinearGradient(
+                colors: [Color(0xFFFFF8F3), Color(0xFFFFECEE)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              border: Border.all(color: const Color(0x22A51125)),
+              borderRadius: BorderRadius.circular(24),
               boxShadow: const [
                 BoxShadow(
-                  color: Color(0x1F111827),
-                  blurRadius: 18,
-                  offset: Offset(0, 8),
+                  color: Color(0x149E1025),
+                  blurRadius: 22,
+                  offset: Offset(0, 10),
                 ),
               ],
             ),
@@ -5409,9 +5462,14 @@ class SettingsPage extends StatelessWidget {
                   width: 66,
                   height: 66,
                   decoration: BoxDecoration(
-                    color: SaydianColors.brandRed,
-                    border: Border.all(color: const Color(0x55FFFFFF)),
+                    gradient: const LinearGradient(
+                      colors: [SaydianColors.brandRed, Color(0xFFE13045)],
+                    ),
+                    border: Border.all(color: Colors.white, width: 2),
                     shape: BoxShape.circle,
+                    boxShadow: const [
+                      BoxShadow(color: Color(0x33A51125), blurRadius: 12),
+                    ],
                   ),
                   child: const Icon(
                     Icons.person_rounded,
@@ -5429,61 +5487,71 @@ class SettingsPage extends StatelessWidget {
                         style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w900,
-                          color: Colors.white,
+                          color: SaydianColors.ink,
                         ),
                       ),
                       const SizedBox(height: 5),
                       Text(
                         controller.session == null
-                            ? '健康档案仅保存在本机'
-                            : 'ID：$memberId',
+                            ? '登录后开启云端健康服务'
+                            : '会员 ID：$memberId',
                         style: const TextStyle(
-                          color: Color(0xFFC7CFDC),
+                          color: SaydianColors.muted,
                           fontSize: 14,
                         ),
                       ),
                     ],
                   ),
                 ),
-                const Icon(Icons.chevron_right_rounded, color: Colors.white),
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.edit_outlined,
+                    color: SaydianColors.brandRed,
+                    size: 19,
+                  ),
+                ),
               ],
             ),
           ),
         ),
         const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF2F5F8),
-            border: Border.all(color: const Color(0x17344B7D)),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(
-            children: [
-              const Icon(
-                Icons.shield_outlined,
+        Row(
+          children: [
+            Expanded(
+              child: _ProfileStat(
+                icon: Icons.watch_outlined,
+                label: '设备',
+                value: controller.connectedDevice == null ? '未连接' : '在线',
+                color: controller.connectedDevice == null
+                    ? SaydianColors.muted
+                    : SaydianColors.green,
+              ),
+            ),
+            const SizedBox(width: 9),
+            Expanded(
+              child: _ProfileStat(
+                icon: Icons.monitor_heart_outlined,
+                label: '健康记录',
+                value: '${controller.healthRecords.length} 条',
+                color: SaydianColors.brandRed,
+              ),
+            ),
+            const SizedBox(width: 9),
+            Expanded(
+              child: _ProfileStat(
+                icon: Icons.family_restroom_rounded,
+                label: '关爱成员',
+                value: '${controller.careMembers.length} 人',
                 color: SaydianColors.techBlue,
-                size: 20,
               ),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  '健康档案安全守护中',
-                  style: TextStyle(fontWeight: FontWeight.w800),
-                ),
-              ),
-              Text(
-                controller.connectedDevice == null ? '设备未连接' : '设备在线',
-                style: TextStyle(
-                  color: controller.connectedDevice == null
-                      ? SaydianColors.muted
-                      : SaydianColors.green,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
         const SizedBox(height: 14),
         Card(
@@ -5543,7 +5611,10 @@ class SettingsPage extends StatelessWidget {
                       child: _OrderEntry(
                         label: '售后',
                         icon: Icons.support_agent_rounded,
-                        onTap: () => _openPage(context, const AfterSalesPage()),
+                        onTap: () => _openPage(
+                          context,
+                          AfterSalesPage(controller: controller),
+                        ),
                       ),
                     ),
                   ],
@@ -5641,6 +5712,58 @@ class SettingsPage extends StatelessWidget {
   void _openPage(BuildContext context, Widget page) {
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
   }
+}
+
+class _ProfileStat extends StatelessWidget {
+  const _ProfileStat({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    constraints: const BoxConstraints(minHeight: 86),
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 12),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      border: Border.all(color: const Color(0xFFEAE5E2)),
+      borderRadius: BorderRadius.circular(17),
+      boxShadow: const [
+        BoxShadow(
+          color: Color(0x0D111827),
+          blurRadius: 10,
+          offset: Offset(0, 4),
+        ),
+      ],
+    ),
+    child: Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(icon, color: color, size: 23),
+        const SizedBox(height: 6),
+        Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: SaydianColors.muted, fontSize: 12),
+        ),
+      ],
+    ),
+  );
 }
 
 class _MyServicesGrid extends StatelessWidget {
@@ -5879,6 +6002,311 @@ class _MyServiceEntry extends StatelessWidget {
   }
 }
 
+class AfterSalesPage extends StatefulWidget {
+  const AfterSalesPage({
+    required this.controller,
+    this.order,
+    this.orderNumber,
+    super.key,
+  });
+
+  final AppController controller;
+  final Map<String, Object?>? order;
+  final String? orderNumber;
+
+  @override
+  State<AfterSalesPage> createState() => _AfterSalesPageState();
+}
+
+class _AfterSalesPageState extends State<AfterSalesPage> {
+  @override
+  void initState() {
+    super.initState();
+    if (widget.order == null) unawaited(widget.controller.loadOrders(null));
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('售后服务')),
+    body: ListenableBuilder(
+      listenable: widget.controller,
+      builder: (context, _) {
+        final source = widget.order == null
+            ? widget.controller.orders
+            : [widget.order!];
+        final eligible = source.where((order) {
+          final status = int.tryParse('${order['order_status'] ?? ''}');
+          return status != null && status > 0;
+        }).toList();
+        if (eligible.isEmpty) {
+          return RefreshIndicator(
+            onRefresh: () => widget.controller.loadOrders(null),
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.all(24),
+              children: const [
+                SizedBox(height: 80),
+                Icon(
+                  Icons.support_agent_outlined,
+                  size: 68,
+                  color: SaydianColors.outline,
+                ),
+                SizedBox(height: 16),
+                Text(
+                  '暂无可申请售后的订单',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  '已付款订单可按商品提交退款或退货退款申请。',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: SaydianColors.muted),
+                ),
+              ],
+            ),
+          );
+        }
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+          children: [
+            const _InlineNotice(
+              message: '请选择需要售后的商品，并填写原因和申请金额。提交后可在订单列表查看处理状态。',
+              icon: Icons.info_outline_rounded,
+              color: SaydianColors.techBlue,
+            ),
+            const SizedBox(height: 12),
+            for (final order in eligible) ...[
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '订单号 ${order['order_sn'] ?? widget.orderNumber ?? order['id'] ?? ''}',
+                        style: const TextStyle(
+                          color: SaydianColors.muted,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const Divider(height: 24),
+                      for (final product in _orderProducts(order))
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _OrderProductImage(product: product),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '${product['product_name'] ?? '商品'}',
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 5),
+                                    Text(
+                                      '${product['sku_name'] ?? ''}',
+                                      style: const TextStyle(
+                                        color: SaydianColors.muted,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 9),
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: OutlinedButton(
+                                        onPressed: () =>
+                                            _openApply(context, order, product),
+                                        child: Text(
+                                          '${product['is_customer'] ?? 0}' ==
+                                                  '1'
+                                              ? '查看售后状态'
+                                              : '申请售后',
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+          ],
+        );
+      },
+    ),
+  );
+
+  List<Map<String, Object?>> _orderProducts(Map<String, Object?> order) {
+    final raw = order['product'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((item) => item.map((key, value) => MapEntry('$key', value)))
+        .toList(growable: false);
+  }
+
+  void _openApply(
+    BuildContext context,
+    Map<String, Object?> order,
+    Map<String, Object?> product,
+  ) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _AfterSalesApplyPage(
+          controller: widget.controller,
+          order: order,
+          product: product,
+        ),
+      ),
+    );
+  }
+}
+
+class _AfterSalesApplyPage extends StatefulWidget {
+  const _AfterSalesApplyPage({
+    required this.controller,
+    required this.order,
+    required this.product,
+  });
+
+  final AppController controller;
+  final Map<String, Object?> order;
+  final Map<String, Object?> product;
+
+  @override
+  State<_AfterSalesApplyPage> createState() => _AfterSalesApplyPageState();
+}
+
+class _AfterSalesApplyPageState extends State<_AfterSalesApplyPage> {
+  final _reason = TextEditingController();
+  late final TextEditingController _amount;
+  int _refundType = 1;
+  bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _amount = TextEditingController(
+      text:
+          '${widget.product['product_money'] ?? widget.product['price'] ?? ''}',
+    );
+  }
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    _amount.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final alreadyApplied = '${widget.product['is_customer'] ?? 0}' == '1';
+    return Scaffold(
+      appBar: AppBar(title: const Text('申请售后')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            child: ListTile(
+              leading: _OrderProductImage(product: widget.product),
+              title: Text('${widget.product['product_name'] ?? '商品'}'),
+              subtitle: Text(
+                '订单号 ${widget.order['order_sn'] ?? widget.order['id'] ?? ''}',
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (alreadyApplied)
+            const _InlineNotice(
+              message: '该商品已经提交售后申请，请等待商城工作人员处理。',
+              icon: Icons.schedule_rounded,
+              color: SaydianColors.orange,
+            )
+          else ...[
+            DropdownButtonFormField<int>(
+              initialValue: _refundType,
+              decoration: const InputDecoration(labelText: '售后类型'),
+              items: const [
+                DropdownMenuItem(value: 1, child: Text('仅退款')),
+                DropdownMenuItem(value: 2, child: Text('退货退款')),
+              ],
+              onChanged: (value) => setState(() => _refundType = value ?? 1),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _amount,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(labelText: '申请金额'),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _reason,
+              minLines: 3,
+              maxLines: 5,
+              maxLength: 200,
+              decoration: const InputDecoration(
+                labelText: '售后原因',
+                hintText: '请说明遇到的问题',
+                alignLabelWithHint: true,
+              ),
+            ),
+            const SizedBox(height: 18),
+            FilledButton(
+              onPressed: _submitting ? null : _submit,
+              child: Text(_submitting ? '提交中…' : '提交申请'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _submit() async {
+    final productId = int.tryParse('${widget.product['id'] ?? ''}');
+    final amount = num.tryParse(_amount.text.trim());
+    if (productId == null || amount == null || amount <= 0) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请检查商品和申请金额')));
+      return;
+    }
+    setState(() => _submitting = true);
+    final success = await widget.controller.applyOrderRefund(
+      orderProductId: productId,
+      refundType: _refundType,
+      amount: amount,
+      reason: _reason.text,
+    );
+    if (!mounted) return;
+    setState(() => _submitting = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success ? '售后申请已提交' : widget.controller.errorMessage ?? '提交失败',
+        ),
+      ),
+    );
+    if (success) Navigator.pop(context);
+  }
+}
+
 class OrdersPage extends StatefulWidget {
   const OrdersPage({
     required this.controller,
@@ -5900,8 +6328,7 @@ class _OrdersPageState extends State<OrdersPage> {
     (0, '待支付'),
     (1, '待发货'),
     (2, '待收货'),
-    (3, '待评价'),
-    (4, '已完成'),
+    (3, '已完成'),
     (-1, '售后'),
   ];
 
@@ -5954,7 +6381,16 @@ class _OrdersPageState extends State<OrdersPage> {
                         final status = int.tryParse(
                           '${order['order_status'] ?? ''}',
                         );
-                        return status != null && status < 0;
+                        final products = order['product'];
+                        final hasAfterSalesProduct =
+                            products is List &&
+                            products.whereType<Map>().any(
+                              (product) =>
+                                  '${product['is_customer'] ?? 0}' == '1',
+                            );
+                        return (status != null && status < 0) ||
+                            '${order['is_customer'] ?? 0}' == '1' ||
+                            hasAfterSalesProduct;
                       }).toList()
                     : widget.controller.orders;
                 if (orders.isEmpty) {
@@ -6022,7 +6458,7 @@ class _OrderCard extends StatelessWidget {
       0 => '待付款',
       1 => '待发货',
       2 => '待收货',
-      3 => '待评价',
+      3 => '已完成',
       4 => '已完成',
       -1 => '申请退款',
       -2 => '退款中',
@@ -6454,8 +6890,11 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                                 settings: const RouteSettings(
                                   name: 'after-sales',
                                 ),
-                                builder: (_) =>
-                                    AfterSalesPage(orderNumber: orderNumber),
+                                builder: (_) => AfterSalesPage(
+                                  controller: widget.controller,
+                                  order: _order,
+                                  orderNumber: orderNumber,
+                                ),
                               ),
                             ),
                             icon: const Icon(Icons.support_agent_outlined),
@@ -6473,6 +6912,13 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                             ),
                             icon: const Icon(Icons.local_shipping_outlined),
                             label: const Text('查看物流'),
+                          ),
+                        if (status == 2)
+                          FilledButton.icon(
+                            key: const Key('confirm-order-receipt'),
+                            onPressed: _confirmReceipt,
+                            icon: const Icon(Icons.inventory_rounded),
+                            label: const Text('确认收货'),
                           ),
                         if (status == 0)
                           FilledButton.icon(
@@ -6504,7 +6950,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     0 => '等待付款',
     1 => '等待发货',
     2 => '等待收货',
-    3 => '等待评价',
+    3 => '交易完成',
     4 => '交易完成',
     _ => '${_order['order_status_name'] ?? '订单处理中'}',
   };
@@ -6513,10 +6959,41 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     0 => '请在订单有效期内完成支付',
     1 => '商家正在准备您的商品',
     2 => '商品已发出，请注意查收',
-    3 => '期待您分享本次购物体验',
+    3 => '感谢您使用赛电商城',
     4 => '感谢您使用赛电商城',
     _ => '订单状态以商城最新数据为准',
   };
+
+  Future<void> _confirmReceipt() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('确认已经收到商品？'),
+        content: const Text('确认收货后订单将完成。如尚未收到商品，请不要确认。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('暂不确认'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('确认收货'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final success = await widget.controller.confirmOrderReceipt(widget.id);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success ? '已确认收货' : widget.controller.errorMessage ?? '确认收货失败',
+        ),
+      ),
+    );
+    if (success) await _load();
+  }
 }
 
 class _OrderAmountRow extends StatelessWidget {

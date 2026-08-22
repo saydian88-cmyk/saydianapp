@@ -235,6 +235,11 @@ class _HealthTrendPageState extends State<HealthTrendPage> {
   Widget build(BuildContext context) {
     final measurementEnabled =
         widget.controller.connectedDevice != null &&
+        widget.controller.capabilities?.supportsManualMeasurement(
+              widget.metric,
+            ) ==
+            true;
+    final supportsSyncedMetric =
         widget.controller.capabilities?.supports(widget.metric) == true;
     final range = HealthTrendRange.forPeriod(_period, _anchor);
     final rangeLabel = switch (_period) {
@@ -308,6 +313,9 @@ class _HealthTrendPageState extends State<HealthTrendPage> {
                       ? '该指标暂不支持手动测量'
                       : measurementEnabled
                       ? (_measuring ? '测量中' : '手动测量')
+                      : widget.controller.connectedDevice != null &&
+                            supportsSyncedMetric
+                      ? '当前手表仅支持同步该数据'
                       : '连接支持该指标的手表后测量',
                 ),
               ),

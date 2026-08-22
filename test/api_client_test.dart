@@ -31,6 +31,28 @@ void main() {
     expect(await api.getCareMembers(), isEmpty);
   });
 
+  test('care member list keeps only safe identity fields', () async {
+    final client = MockClient(
+      (_) async => http.Response(
+        '''{"code":200,"data":[{"id":7,"member_id":1,"to_member_id":2,
+        "member":{"id":2,"nickname":"妈妈","mobile":"13800138000",
+        "head_portrait":"https://example.invalid/a.png","password_hash":"secret"}}]}''',
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      ),
+    );
+    final api = SaydianApiClient(
+      _authenticatedVault(),
+      client: client,
+      baseUri: Uri.parse('https://example.invalid'),
+    );
+
+    final member = (await api.getCareMembers()).single;
+    expect(member['nickname'], '妈妈');
+    expect(member['mobile'], '13800138000');
+    expect(member.toString(), isNot(contains('password_hash')));
+  });
+
   test('add care uses authenticated multipart mobile contract', () async {
     final vault = MemorySessionVault()
       ..session = Session(
@@ -364,10 +386,41 @@ void main() {
     );
 
     expect(
-      await api.previewShopOrder(skuId: 2975, quantity: 2),
+      await api.previewShopOrder(
+        items: const [
+          {'sku_id': 2975, 'num': 2},
+        ],
+      ),
       contains('products'),
     );
   });
+
+  test(
+    'shop checkout rejects unsupported multi-product payloads locally',
+    () async {
+      final api = SaydianApiClient(
+        _authenticatedVault(),
+        client: MockClient((_) async => throw StateError('must not request')),
+        baseUri: Uri.parse('https://example.invalid'),
+      );
+
+      expect(
+        () => api.previewShopOrder(
+          items: const [
+            {'sku_id': 2975, 'num': 1},
+            {'sku_id': 2976, 'num': 1},
+          ],
+        ),
+        throwsA(
+          isA<ApiException>().having(
+            (error) => error.message,
+            'message',
+            contains('不支持多件商品合并结算'),
+          ),
+        ),
+      );
+    },
+  );
 
   test('create order sends the confirmed JSON checkout contract', () async {
     final client = MockClient((request) async {
@@ -389,13 +442,49 @@ void main() {
     );
 
     final order = await api.createShopOrder(
-      skuId: 2975,
-      quantity: 2,
+      items: const [
+        {'sku_id': 2975, 'num': 2},
+      ],
       addressId: 8,
       buyerMessage: '请尽快发货',
     );
     expect(order['id'], 99);
   });
+
+  test(
+    'confirm receipt and after-sales use authenticated shop routes',
+    () async {
+      final requests = <http.Request>[];
+      final client = MockClient((request) async {
+        requests.add(request);
+        return http.Response('{"code":200,"data":{}}', 200);
+      });
+      final api = SaydianApiClient(
+        _authenticatedVault(),
+        client: client,
+        baseUri: Uri.parse('https://example.invalid'),
+      );
+
+      await api.confirmOrderReceipt(424);
+      await api.applyOrderRefund(
+        orderProductId: 800,
+        refundType: 2,
+        amount: 99,
+        reason: '商品无法正常使用',
+      );
+
+      expect(
+        requests[0].url.path,
+        '/api/inv-shop/v1/member/order/take-delivery',
+      );
+      expect(requests[0].body, contains('424'));
+      expect(
+        requests[1].url.path,
+        '/api/inv-shop/v1/member/order-product/refund-apply',
+      );
+      expect(requests[1].body, contains('商品无法正常使用'));
+    },
+  );
 
   test('address create uses authenticated JSON region fields', () async {
     final client = MockClient((request) async {
@@ -619,6 +708,53 @@ void main() {
     await api.getCareMembers();
 
     expect(requestIndex, 2);
+    expect(vault.session?.accessToken, 'fresh-access');
+    expect(vault.session?.refreshToken, 'fresh-refresh');
+  });
+
+  test('server-revoked access token refreshes once and retries request', () async {
+    final vault = MemorySessionVault()
+      ..session = Session(
+        accessToken: 'revoked-access',
+        refreshToken: 'long-lived-refresh',
+        expiresAt: DateTime.now().toUtc().add(const Duration(hours: 8)),
+        memberId: '7',
+        displayName: '长期登录用户',
+      );
+    var requestIndex = 0;
+    final client = MockClient((request) async {
+      requestIndex++;
+      if (requestIndex == 1) {
+        expect(request.url.path, '/api/v1/member/care/my');
+        expect(request.headers['authorization'], 'Bearer revoked-access');
+        return http.Response(
+          '{"code":401,"message":"Your request was made with invalid credentials.","data":{}}',
+          200,
+        );
+      }
+      if (requestIndex == 2) {
+        expect(request.method, 'POST');
+        expect(request.url.path, '/api/v1/site/refresh');
+        expect(request.body, contains('long-lived-refresh'));
+        return http.Response(
+          '{"code":200,"data":{"access_token":"fresh-access","refresh_token":"fresh-refresh","expiration_time":43200,"member":{"id":7,"nickname":"长期登录用户"}}}',
+          200,
+          headers: const {'content-type': 'application/json; charset=utf-8'},
+        );
+      }
+      expect(request.url.path, '/api/v1/member/care/my');
+      expect(request.headers['authorization'], 'Bearer fresh-access');
+      return http.Response('{"code":200,"data":[]}', 200);
+    });
+    final api = SaydianApiClient(
+      vault,
+      client: client,
+      baseUri: Uri.parse('https://example.invalid'),
+    );
+
+    expect(await api.getCareMembers(), isEmpty);
+
+    expect(requestIndex, 3);
     expect(vault.session?.accessToken, 'fresh-access');
     expect(vault.session?.refreshToken, 'fresh-refresh');
   });

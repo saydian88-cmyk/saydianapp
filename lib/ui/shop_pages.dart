@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../services/api_client.dart';
 import '../services/app_controller.dart';
 import 'app_theme.dart';
 import 'prototype_pages.dart';
@@ -92,7 +93,10 @@ class _ShopHomePageState extends State<ShopHomePage> {
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute<void>(
                 settings: const RouteSettings(name: 'shopping-cart'),
-                builder: (_) => const ShoppingCartPage(),
+                builder: (_) => ShoppingCartPage(
+                  controller: widget.controller,
+                  ordersPageBuilder: widget.ordersPageBuilder,
+                ),
               ),
             ),
             icon: const Icon(Icons.shopping_cart_outlined),
@@ -114,98 +118,137 @@ class _ShopHomePageState extends State<ShopHomePage> {
               message: widget.controller.errorMessage ?? '商城加载失败，请稍后重试',
               onRetry: _load,
             )
-          : RefreshIndicator(
-              onRefresh: _load,
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
-                children: [
-                  TextField(
+          : Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
+                  child: TextField(
                     key: const Key('shop-search'),
                     onChanged: (value) => setState(() => _keyword = value),
                     decoration: const InputDecoration(
-                      hintText: '搜索商品名称',
+                      hintText: '搜索商品',
                       prefixIcon: Icon(Icons.search_rounded),
                     ),
                   ),
-                  if (_banners.isNotEmpty) ...[
-                    const SizedBox(height: 14),
-                    SizedBox(
-                      height: 176,
-                      child: PageView.builder(
-                        itemCount: _banners.length,
-                        itemBuilder: (_, index) => Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 2),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(18),
-                            child: ShopNetworkImage(url: _banners[index]),
-                          ),
+                ),
+                if (_banners.isNotEmpty)
+                  SizedBox(
+                    height: 112,
+                    child: PageView.builder(
+                      itemCount: _banners.length,
+                      itemBuilder: (_, index) => Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: ShopNetworkImage(url: _banners[index]),
                         ),
                       ),
                     ),
-                  ],
-                  const SizedBox(height: 18),
-                  if (_tabs.isNotEmpty)
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          for (var index = 0; index < _tabs.length; index++)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: ChoiceChip(
-                                label: Text('${_tabs[index]['name'] ?? '商品'}'),
-                                selected: _activeTab == index,
-                                onSelected: (_) =>
-                                    setState(() => _activeTab = index),
+                  ),
+                Expanded(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Container(
+                        key: const Key('shop-category-list'),
+                        width: 106,
+                        color: const Color(0xFFF5F2F0),
+                        child: ListView.builder(
+                          itemCount: _tabs.length,
+                          itemBuilder: (_, index) {
+                            final selected = index == _activeTab;
+                            return InkWell(
+                              onTap: () => setState(() => _activeTab = index),
+                              child: Container(
+                                constraints: const BoxConstraints(
+                                  minHeight: 64,
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 12,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: selected ? Colors.white : null,
+                                  border: Border(
+                                    left: BorderSide(
+                                      color: selected
+                                          ? SaydianColors.brandRed
+                                          : Colors.transparent,
+                                      width: 4,
+                                    ),
+                                  ),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  '${_tabs[index]['name'] ?? '商品'}',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: selected
+                                        ? SaydianColors.brandRed
+                                        : SaydianColors.ink,
+                                    fontWeight: selected
+                                        ? FontWeight.w900
+                                        : FontWeight.w600,
+                                  ),
+                                ),
                               ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  const SizedBox(height: 14),
-                  if (_products.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 56),
-                      child: Center(
-                        child: Text(
-                          '当前分类暂无商品',
-                          style: TextStyle(color: SaydianColors.muted),
+                            );
+                          },
                         ),
                       ),
-                    )
-                  else
-                    GridView.builder(
-                      key: const Key('shop-product-grid'),
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: _products.length,
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 2,
-                            crossAxisSpacing: 12,
-                            mainAxisSpacing: 12,
-                            childAspectRatio: 0.67,
-                          ),
-                      itemBuilder: (_, index) => _ProductCard(
-                        product: _products[index],
-                        onTap: () {
-                          final id = _asInt(_products[index]['id']);
-                          if (id == null) return;
-                          Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => ShopProductPage(
-                                controller: widget.controller,
-                                productId: id,
-                                ordersPageBuilder: widget.ordersPageBuilder,
-                              ),
-                            ),
-                          );
-                        },
+                      Expanded(
+                        child: RefreshIndicator(
+                          onRefresh: _load,
+                          child: _products.isEmpty
+                              ? ListView(
+                                  children: const [
+                                    SizedBox(height: 90),
+                                    Icon(
+                                      Icons.inventory_2_outlined,
+                                      size: 48,
+                                      color: SaydianColors.outline,
+                                    ),
+                                    SizedBox(height: 10),
+                                    Center(child: Text('当前分类暂无商品')),
+                                  ],
+                                )
+                              : ListView.separated(
+                                  key: const Key('shop-product-grid'),
+                                  padding: const EdgeInsets.fromLTRB(
+                                    12,
+                                    4,
+                                    14,
+                                    24,
+                                  ),
+                                  itemCount: _products.length,
+                                  separatorBuilder: (_, _) =>
+                                      const SizedBox(height: 10),
+                                  itemBuilder: (_, index) => _ProductCard(
+                                    product: _products[index],
+                                    onTap: () => _openProduct(_products[index]),
+                                  ),
+                                ),
+                        ),
                       ),
-                    ),
-                ],
-              ),
+                    ],
+                  ),
+                ),
+              ],
             ),
+    );
+  }
+
+  void _openProduct(Map<String, Object?> product) {
+    final id = _asInt(product['id']);
+    if (id == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ShopProductPage(
+          controller: widget.controller,
+          productId: id,
+          ordersPageBuilder: widget.ordersPageBuilder,
+        ),
+      ),
     );
   }
 }
@@ -222,44 +265,45 @@ class _ProductCard extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Expanded(
-              child: SizedBox(
-                width: double.infinity,
-                child: ShopNetworkImage(url: '${product['picture'] ?? ''}'),
-              ),
+            SizedBox.square(
+              dimension: 104,
+              child: ShopNetworkImage(url: '${product['picture'] ?? ''}'),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${product['name'] ?? '商品'}',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    '销量 ${product['sales'] ?? 0}',
-                    style: const TextStyle(
-                      color: SaydianColors.muted,
-                      fontSize: 13,
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${product['name'] ?? '商品'}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '¥${_money(product['price'])}',
-                    style: const TextStyle(
-                      color: SaydianColors.orange,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w900,
+                    const SizedBox(height: 6),
+                    Text(
+                      '销量 ${product['sales'] ?? 0}',
+                      style: const TextStyle(
+                        color: SaydianColors.muted,
+                        fontSize: 13,
+                      ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 4),
+                    Text(
+                      '¥${_money(product['price'])}',
+                      style: const TextStyle(
+                        color: SaydianColors.orange,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
@@ -326,7 +370,7 @@ class _ShopProductPageState extends State<ShopProductPage> {
 
   int get _stock => _asInt(_selectedSku?['stock']) ?? 0;
 
-  Future<void> _showPurchaseSheet() async {
+  Future<void> _showPurchaseSheet({bool addToCart = false}) async {
     if (_selectedSku == null) {
       _showMessage('该商品暂无可购买规格');
       return;
@@ -412,9 +456,13 @@ class _ShopProductPageState extends State<ShopProductPage> {
                         ? null
                         : () {
                             Navigator.pop(sheetContext);
-                            _checkout();
+                            if (addToCart) {
+                              unawaited(_addToCart());
+                            } else {
+                              _checkout();
+                            }
                           },
-                    child: const Text('确定'),
+                    child: Text(addToCart ? '加入购物车' : '立即购买'),
                   ),
                 ),
               ],
@@ -437,13 +485,26 @@ class _ShopProductPageState extends State<ShopProductPage> {
       MaterialPageRoute<void>(
         builder: (_) => ShopCheckoutPage(
           controller: widget.controller,
-          product: _product,
-          sku: sku,
-          quantity: _quantity,
+          items: [_cartItem(_product, sku, _quantity)],
           ordersPageBuilder: widget.ordersPageBuilder,
         ),
       ),
     );
+  }
+
+  Future<void> _addToCart() async {
+    final sku = _selectedSku;
+    if (sku == null) return;
+    try {
+      await widget.controller.addToShopCart(
+        product: _product,
+        sku: sku,
+        quantity: _quantity,
+      );
+      if (mounted) _showMessage('已加入购物车');
+    } on ApiException catch (error) {
+      if (mounted) _showMessage(error.message);
+    }
   }
 
   void _showMessage(String message) {
@@ -463,83 +524,129 @@ class _ShopProductPageState extends State<ShopProductPage> {
               message: widget.controller.errorMessage ?? '商品详情加载失败',
               onRetry: _load,
             )
-          : ListView(
-              padding: const EdgeInsets.only(bottom: 100),
-              children: [
-                SizedBox(
-                  height: 350,
-                  child: _covers.isEmpty
-                      ? const ShopNetworkImage(url: '')
-                      : PageView.builder(
-                          itemCount: _covers.length,
-                          itemBuilder: (_, index) =>
-                              ShopNetworkImage(url: _covers[index]),
-                        ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(18),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '${_product['name'] ?? '商品'}',
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Text(
-                            '¥${_money(_selectedSku?['price'] ?? _product['price'])}',
-                            style: const TextStyle(
-                              color: SaydianColors.orange,
-                              fontSize: 24,
-                              fontWeight: FontWeight.w900,
-                            ),
+          : ColoredBox(
+              color: const Color(0xFFF6F4F2),
+              child: ListView(
+                padding: const EdgeInsets.only(bottom: 100),
+                children: [
+                  SizedBox(
+                    height: 350,
+                    child: _covers.isEmpty
+                        ? const ShopNetworkImage(url: '')
+                        : PageView.builder(
+                            itemCount: _covers.length,
+                            itemBuilder: (_, index) =>
+                                ShopNetworkImage(url: _covers[index]),
                           ),
-                          const Spacer(),
-                          Text(
-                            '销量 ${_product['sales'] ?? 0}',
-                            style: const TextStyle(color: SaydianColors.muted),
-                          ),
-                        ],
-                      ),
-                      if (_skus.isNotEmpty) ...[
-                        const SizedBox(height: 18),
-                        Card(
-                          child: ListTile(
-                            onTap: _showPurchaseSheet,
-                            title: const Text('规格'),
-                            subtitle: Text(
-                              '${_selectedSku?['name'] ?? '请选择规格'}',
-                            ),
-                            trailing: const Icon(Icons.chevron_right_rounded),
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 22),
-                      const Text(
-                        '商品详情',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        _plainText('${_product['intro'] ?? ''}'),
-                        style: const TextStyle(height: 1.65),
-                      ),
-                    ],
                   ),
-                ),
-              ],
+                  Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Card(
+                      margin: EdgeInsets.zero,
+                      child: Padding(
+                        padding: const EdgeInsets.all(18),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${_product['name'] ?? '商品'}',
+                              style: const TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Text(
+                                  '¥${_money(_selectedSku?['price'] ?? _product['price'])}',
+                                  style: const TextStyle(
+                                    color: SaydianColors.orange,
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                const Spacer(),
+                                Text(
+                                  '销量 ${_product['sales'] ?? 0}',
+                                  style: const TextStyle(
+                                    color: SaydianColors.muted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            const Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                _ShopPromise(
+                                  icon: Icons.verified_outlined,
+                                  label: '品质保障',
+                                ),
+                                _ShopPromise(
+                                  icon: Icons.local_shipping_outlined,
+                                  label: '配送到家',
+                                ),
+                                _ShopPromise(
+                                  icon: Icons.support_agent_outlined,
+                                  label: '售后服务',
+                                ),
+                              ],
+                            ),
+                            if (_skus.isNotEmpty) ...[
+                              const SizedBox(height: 18),
+                              Card(
+                                child: ListTile(
+                                  onTap: _showPurchaseSheet,
+                                  title: const Text('规格'),
+                                  subtitle: Text(
+                                    '${_selectedSku?['name'] ?? '请选择规格'}',
+                                  ),
+                                  trailing: const Icon(
+                                    Icons.chevron_right_rounded,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 0, 14, 18),
+                    child: Card(
+                      margin: EdgeInsets.zero,
+                      child: Padding(
+                        padding: const EdgeInsets.all(18),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '商品详情',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              _plainText('${_product['intro'] ?? ''}'),
+                              style: const TextStyle(height: 1.7),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
       bottomNavigationBar: _product.isEmpty
           ? null
           : SafeArea(
+              maintainBottomViewPadding: true,
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
                 child: Row(
@@ -564,8 +671,15 @@ class _ShopProductPageState extends State<ShopProductPage> {
                     ),
                     const SizedBox(width: 12),
                     Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => _showPurchaseSheet(addToCart: true),
+                        child: const Text('加入购物车'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
                       child: FilledButton(
-                        onPressed: _showPurchaseSheet,
+                        onPressed: () => _showPurchaseSheet(),
                         child: const Text('立即购买'),
                       ),
                     ),
@@ -577,20 +691,270 @@ class _ShopProductPageState extends State<ShopProductPage> {
   }
 }
 
-class ShopCheckoutPage extends StatefulWidget {
-  const ShopCheckoutPage({
+class _ShopPromise extends StatelessWidget {
+  const _ShopPromise({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+    decoration: BoxDecoration(
+      color: SaydianColors.brandRedSoft,
+      borderRadius: BorderRadius.circular(999),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16, color: SaydianColors.brandRed),
+        const SizedBox(width: 4),
+        Text(label, style: const TextStyle(fontSize: 13)),
+      ],
+    ),
+  );
+}
+
+class ShoppingCartPage extends StatelessWidget {
+  const ShoppingCartPage({
     required this.controller,
-    required this.product,
-    required this.sku,
-    required this.quantity,
     this.ordersPageBuilder,
     super.key,
   });
 
   final AppController controller;
-  final Map<String, Object?> product;
-  final Map<String, Object?> sku;
-  final int quantity;
+  final WidgetBuilder? ordersPageBuilder;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: controller,
+    builder: (context, _) {
+      final items = controller.shopCart;
+      final total = items.fold<double>(0, (sum, item) {
+        return sum + _asDouble(item['price']) * (_asInt(item['quantity']) ?? 0);
+      });
+      return Scaffold(
+        key: const Key('shopping-cart-page'),
+        appBar: AppBar(
+          title: Text('购物车${items.isEmpty ? '' : '（${items.length}）'}'),
+          actions: [
+            if (items.isNotEmpty)
+              TextButton(
+                onPressed: () => _confirmClear(context),
+                child: const Text('清空'),
+              ),
+          ],
+        ),
+        body: items.isEmpty
+            ? Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.remove_shopping_cart_outlined,
+                      size: 72,
+                      color: SaydianColors.outline,
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      '购物车还是空的',
+                      style: TextStyle(
+                        fontSize: 19,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text('去商城挑选适合您的健康设备吧'),
+                    const SizedBox(height: 18),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('返回商城'),
+                    ),
+                  ],
+                ),
+              )
+            : ListView.separated(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 110),
+                itemCount: items.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 10),
+                itemBuilder: (_, index) => _CartItemCard(
+                  item: items[index],
+                  onQuantityChanged: (quantity) {
+                    final skuId = _asInt(items[index]['sku_id']);
+                    if (skuId != null) {
+                      unawaited(
+                        controller.updateShopCartQuantity(skuId, quantity),
+                      );
+                    }
+                  },
+                ),
+              ),
+        bottomNavigationBar: items.isEmpty
+            ? null
+            : SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 8, 12, 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '合计 ¥${_money(total)}',
+                          style: const TextStyle(
+                            color: SaydianColors.brandRed,
+                            fontSize: 19,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      FilledButton(
+                        key: const Key('cart-checkout'),
+                        onPressed: () {
+                          if (items.length != 1) {
+                            ScaffoldMessenger.of(context)
+                              ..hideCurrentSnackBar()
+                              ..showSnackBar(
+                                const SnackBar(
+                                  content: Text('当前商城暂不支持多件商品合并结算，请分别结算'),
+                                ),
+                              );
+                            return;
+                          }
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => ShopCheckoutPage(
+                                controller: controller,
+                                items: items,
+                                clearCartAfterCreate: true,
+                                ordersPageBuilder: ordersPageBuilder,
+                              ),
+                            ),
+                          );
+                        },
+                        child: const Text('去结算'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+      );
+    },
+  );
+
+  Future<void> _confirmClear(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('清空购物车？'),
+        content: const Text('已加入的商品将全部移除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('清空'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await controller.clearShopCart();
+  }
+}
+
+class _CartItemCard extends StatelessWidget {
+  const _CartItemCard({required this.item, required this.onQuantityChanged});
+
+  final Map<String, Object?> item;
+  final ValueChanged<int> onQuantityChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final quantity = _asInt(item['quantity']) ?? 1;
+    final stock = _asInt(item['stock']) ?? quantity;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox.square(
+              dimension: 88,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: ShopNetworkImage(url: '${item['picture'] ?? ''}'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${item['product_name'] ?? '商品'}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${item['sku_name'] ?? ''}',
+                    style: const TextStyle(color: SaydianColors.muted),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '¥${_money(item['price'])}',
+                          style: const TextStyle(
+                            color: SaydianColors.brandRed,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      IconButton.outlined(
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => onQuantityChanged(quantity - 1),
+                        icon: Icon(
+                          quantity == 1 ? Icons.delete_outline : Icons.remove,
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: Text('$quantity'),
+                      ),
+                      IconButton.outlined(
+                        visualDensity: VisualDensity.compact,
+                        onPressed: quantity >= stock
+                            ? null
+                            : () => onQuantityChanged(quantity + 1),
+                        icon: const Icon(Icons.add),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ShopCheckoutPage extends StatefulWidget {
+  const ShopCheckoutPage({
+    required this.controller,
+    required this.items,
+    this.clearCartAfterCreate = false,
+    this.ordersPageBuilder,
+    super.key,
+  });
+
+  final AppController controller;
+  final List<Map<String, Object?>> items;
+  final bool clearCartAfterCreate;
   final WidgetBuilder? ordersPageBuilder;
 
   @override
@@ -619,12 +983,12 @@ class _ShopCheckoutPageState extends State<ShopCheckoutPage> {
   }
 
   Future<void> _load() async {
-    final skuId = _asInt(widget.sku['id']);
-    if (skuId == null) return;
-    final preview = await widget.controller.previewShopOrder(
-      skuId: skuId,
-      quantity: widget.quantity,
-    );
+    final orderItems = _orderItems;
+    if (orderItems.isEmpty) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+    final preview = await widget.controller.previewShopOrder(items: orderItems);
     if (!mounted) return;
     final address = _mapOrNull(preview['address']);
     setState(() {
@@ -642,6 +1006,16 @@ class _ShopCheckoutPageState extends State<ShopCheckoutPage> {
   double get _productMoney => _asDouble(_summary['product_money']);
   double get _total => _shipping + _productMoney;
 
+  List<Map<String, int>> get _orderItems => widget.items
+      .map((item) {
+        final skuId = _asInt(item['sku_id']);
+        final quantity = _asInt(item['quantity']);
+        if (skuId == null || quantity == null || quantity <= 0) return null;
+        return <String, int>{'sku_id': skuId, 'num': quantity};
+      })
+      .whereType<Map<String, int>>()
+      .toList(growable: false);
+
   Future<void> _chooseAddress() async {
     final selected = await Navigator.of(context).push<Map<String, Object?>>(
       MaterialPageRoute<Map<String, Object?>>(
@@ -657,14 +1031,14 @@ class _ShopCheckoutPageState extends State<ShopCheckoutPage> {
   Future<void> _submit() async {
     if (_submitting) return;
     final addressId = _asInt(_address?['id']);
-    final skuId = _asInt(widget.sku['id']);
+    final orderItems = _orderItems;
     final point = num.tryParse(_point.text.trim()) ?? -1;
     final availablePoint = _asDouble(_account['money1']);
     if (addressId == null) {
       _showMessage('请选择收货地址');
       return;
     }
-    if (skuId == null) {
+    if (orderItems.isEmpty) {
       _showMessage('商品规格信息有误');
       return;
     }
@@ -674,8 +1048,7 @@ class _ShopCheckoutPageState extends State<ShopCheckoutPage> {
     }
     setState(() => _submitting = true);
     final order = await widget.controller.createShopOrder(
-      skuId: skuId,
-      quantity: widget.quantity,
+      items: orderItems,
       addressId: addressId,
       buyerMessage: _message.text,
       point: point,
@@ -686,6 +1059,10 @@ class _ShopCheckoutPageState extends State<ShopCheckoutPage> {
     if (orderId == null) {
       _showMessage(widget.controller.errorMessage ?? '提交订单失败');
       return;
+    }
+    if (widget.clearCartAfterCreate) {
+      await widget.controller.clearShopCart();
+      if (!mounted) return;
     }
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
@@ -1480,6 +1857,21 @@ class _ShopFailure extends StatelessWidget {
     );
   }
 }
+
+Map<String, Object?> _cartItem(
+  Map<String, Object?> product,
+  Map<String, Object?> sku,
+  int quantity,
+) => {
+  'product_id': product['id'],
+  'sku_id': sku['id'],
+  'product_name': product['name'],
+  'sku_name': sku['name'],
+  'picture': sku['picture'] ?? product['picture'],
+  'price': sku['price'] ?? product['price'],
+  'stock': sku['stock'],
+  'quantity': quantity,
+};
 
 Map<String, Object?> _map(Object? value) {
   if (value is! Map) return const {};

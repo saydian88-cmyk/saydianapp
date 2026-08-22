@@ -69,15 +69,49 @@ void main() {
     expect((await service.check()).hasUpdate, isFalse);
   });
 
-  test('unconfigured and insecure update endpoints are rejected', () async {
-    final unconfigured = AppUpdateService(targetPlatform: TargetPlatform.iOS);
-    final insecure = AppUpdateService(
-      manifestUri: Uri.parse('http://app.saidian.cc/update.json'),
-      targetPlatform: TargetPlatform.iOS,
+  test(
+    'default update endpoint is configured and insecure URLs are rejected',
+    () async {
+      final configured = AppUpdateService(targetPlatform: TargetPlatform.iOS);
+      final insecure = AppUpdateService(
+        manifestUri: Uri.parse('http://app.saidian.cc/update.json'),
+        targetPlatform: TargetPlatform.iOS,
+      );
+
+      expect(configured.isConfigured, isTrue);
+      await expectLater(insecure.check(), throwsA(isA<AppUpdateException>()));
+    },
+  );
+
+  test('GitHub release response selects the Android APK', () async {
+    final service = AppUpdateService(
+      manifestUri: Uri.parse(
+        'https://api.github.com/repos/saydian88-cmyk/saydianapp/releases/latest',
+      ),
+      targetPlatform: TargetPlatform.android,
+      packageInfoLoader: () async => package('0.1.17', '21'),
+      client: MockClient(
+        (_) async => http.Response(
+          '''
+          {
+            "tag_name":"android-v0.1.18+22",
+            "body":"修复设备测量与商城流程",
+            "assets":[{
+              "name":"Saydian-0.1.18+22-release.apk",
+              "browser_download_url":"https://github.com/saydian/app.apk"
+            }]
+          }
+          ''',
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        ),
+      ),
     );
 
-    expect(unconfigured.isConfigured, isFalse);
-    await expectLater(unconfigured.check(), throwsA(isA<AppUpdateException>()));
-    await expectLater(insecure.check(), throwsA(isA<AppUpdateException>()));
+    final info = await service.check();
+    expect(info.hasUpdate, isTrue);
+    expect(info.latestVersion, '0.1.18');
+    expect(info.latestBuild, 22);
+    expect(info.releaseNotes, contains('设备测量'));
   });
 }

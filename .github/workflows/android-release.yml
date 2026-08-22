@@ -1,0 +1,102 @@
+name: Android Online Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - android-v*
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.9
+          channel: stable
+          cache: true
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          metadata="$(awk '/^version:/{print $2; exit}' pubspec.yaml)"
+          version="${metadata%%+*}"
+          build="${metadata##*+}"
+          test -n "$version"
+          [[ "$build" =~ ^[1-9][0-9]*$ ]]
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "android-v${version}+${build}" ]]; then
+            echo "Tag must be android-v${version}+${build}." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+      - name: Install Android signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD ANDROID_STORE_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing GitHub Secret: $name" >&2
+              exit 1
+            fi
+          done
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/saidian-release.jks
+          {
+            echo "storeFile=saidian-release.jks"
+            echo "storePassword=$ANDROID_STORE_PASSWORD"
+            echo "keyAlias=$ANDROID_KEY_ALIAS"
+            echo "keyPassword=$ANDROID_KEY_PASSWORD"
+          } > android/key.properties
+
+      - name: Build signed APK
+        env:
+          API_BASE_URL: ${{ vars.SAYDIAN_API_BASE_URL }}
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+          flutter build apk --release \
+            --build-name "${{ steps.version.outputs.version }}" \
+            --build-number "${{ steps.version.outputs.build }}" \
+            --dart-define="SAYDIAN_API_BASE_URL=${API_BASE_URL:-https://app.saidian.cc}"
+
+      - name: Prepare release files
+        shell: bash
+        run: |
+          mkdir -p dist
+          target="dist/Saydian-${{ steps.version.outputs.version }}+${{ steps.version.outputs.build }}-release.apk"
+          cp build/app/outputs/flutter-apk/app-release.apk "$target"
+          sha256sum "$target" > dist/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: saydian-android-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build }}
+          path: dist/*
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.apk
+            dist/SHA256SUMS.txt
+          generate_release_notes: true
